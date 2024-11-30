@@ -5,7 +5,7 @@ import { useState } from "react";
 export default function HomePage() {
   const [username, setUsername] = useState("");
   const [timeframe, setTimeframe] = useState("week");
-  const [commits, setCommits] = useState<Array<{ repo: string; message: string; date: string }>>([]);
+  const [commits, setCommits] = useState<Array<{ repo: string; message: string; date: string; timestamp: number }>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
@@ -56,11 +56,15 @@ export default function HomePage() {
       const data = await response.json();
       if (!response.ok) throw new Error(data.message);
       
-      const formattedCommits = data.items.map((item: any) => ({
-        repo: item.repository.full_name,
-        message: item.commit.message,
-        date: new Date(item.commit.author.date).toLocaleDateString()
-      }));
+      const formattedCommits = data.items.map((item: any) => {
+        const date = new Date(item.commit.author.date);
+        return {
+          repo: item.repository.full_name,
+          message: item.commit.message,
+          date: date.toLocaleDateString(),
+          timestamp: date.getTime()
+        };
+      }).sort((a, b) => b.timestamp - a.timestamp);
       
       const linkHeader = response.headers.get("link");
       setHasMore(linkHeader?.includes('rel="next"') ?? false);
@@ -68,7 +72,7 @@ export default function HomePage() {
       if (pageNum === 1) {
         setCommits(formattedCommits);
       } else {
-        setCommits(prev => [...prev, ...formattedCommits]);
+        setCommits(prev => [...prev, ...formattedCommits].sort((a, b) => b.timestamp - a.timestamp));
       }
       setPage(pageNum);
     } catch (err) {

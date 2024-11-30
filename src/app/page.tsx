@@ -5,6 +5,7 @@ import { useState } from "react";
 export default function HomePage() {
   const [username, setUsername] = useState("");
   const [timeframe, setTimeframe] = useState("week");
+  const [customDays, setCustomDays] = useState("1");
   const [commits, setCommits] = useState<Array<{ repo: string; message: string; date: string; timestamp: number }>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -17,12 +18,20 @@ export default function HomePage() {
       return;
     }
 
+    if (timeframe === "custom" && (isNaN(Number(customDays)) || Number(customDays) < 1)) {
+      setError("Please enter a valid number of days (minimum 1)");
+      return;
+    }
+
     setLoading(true);
     setError("");
     try {
       const now = new Date();
       let fromDate = new Date();
       switch (timeframe) {
+        case "24h":
+          fromDate.setHours(now.getHours() - 24);
+          break;
         case "week":
           fromDate.setDate(now.getDate() - 8);
           break;
@@ -33,6 +42,9 @@ export default function HomePage() {
         case "year":
           fromDate.setFullYear(now.getFullYear() - 1);
           fromDate.setDate(fromDate.getDate() - 1);
+          break;
+        case "custom":
+          fromDate.setDate(now.getDate() - Number(customDays));
           break;
       }
 
@@ -64,7 +76,7 @@ export default function HomePage() {
           date: date.toLocaleDateString(),
           timestamp: date.getTime()
         };
-      }).sort((a, b) => b.timestamp - a.timestamp);
+      }).sort((a: { timestamp: number }, b: { timestamp: number }) => b.timestamp - a.timestamp);
       
       const linkHeader = response.headers.get("link");
       setHasMore(linkHeader?.includes('rel="next"') ?? false);
@@ -95,6 +107,12 @@ export default function HomePage() {
     <main className="flex min-h-screen flex-col items-center bg-black p-8 text-white">
       <div className="w-full max-w-2xl">
         <h1 className="mb-8 text-center text-4xl font-bold">GitHub Activity Tracker</h1>
+
+        {username && (
+          <h2 className="mb-6 text-center text-2xl">
+            What did <span className="font-bold text-blue-400">{username}</span> do in the last {timeframe === "custom" ? `${customDays} day${Number(customDays) > 1 ? 's' : ''}` : timeframe}?
+          </h2>
+        )}
         
         <div className="mb-8 flex flex-col gap-4 sm:flex-row">
           <input
@@ -118,10 +136,27 @@ export default function HomePage() {
             }}
             className="rounded-lg bg-white/10 px-4 py-2 text-white"
           >
+            <option value="24h">Last 24 Hours</option>
             <option value="week">Past Week</option>
             <option value="month">Past Month</option>
             <option value="year">Past Year</option>
+            <option value="custom">Custom Days</option>
           </select>
+
+          {timeframe === "custom" && (
+            <input
+              type="number"
+              value={customDays}
+              onChange={(e) => {
+                setCustomDays(e.target.value);
+                setPage(1);
+                setCommits([]);
+              }}
+              min="1"
+              placeholder="Number of days"
+              className="w-24 rounded-lg bg-white/10 px-4 py-2 text-white"
+            />
+          )}
 
           <button
             onClick={() => fetchCommits(1)}

@@ -122,15 +122,14 @@ export default function HomePage() {
 
   return (
     <main className="flex min-h-screen flex-col items-center bg-black p-8 text-white">
-      <div className="w-full max-w-2xl">
-        <h1 className="mb-8 text-center text-4xl font-bold">GitHub Activity Tracker</h1>
-
-        {username && (
-          <h2 className="mb-6 text-center text-2xl">
-            What {isOrganization ? 'happened in' : 'did'} <span className="font-bold text-blue-400">{username}</span> {isOrganization ? 'in' : 'do in'} the last {timeframe === "custom" ? `${customDays} day${Number(customDays) > 1 ? 's' : ''}` : timeframe}?
-          </h2>
-        )}
-        
+      <div className="w-full max-w-4xl">
+        <h1 className="mb-8 text-center text-4xl font-bold">
+          {username ? (
+            <>What {isOrganization ? 'happened in' : 'did'} <span className="font-bold text-blue-400">{username}</span> {isOrganization ? 'in' : 'do in'} the last {timeframe === "custom" ? `${customDays} day${Number(customDays) > 1 ? 's' : ''}` : timeframe}?</>
+          ) : (
+            "What did you get done?"
+          )}
+        </h1>
         <div className="mb-8 flex flex-col gap-4 sm:flex-row">
           <input
             type="text"
@@ -140,6 +139,11 @@ export default function HomePage() {
               setPage(1);
               setCommits([]);
               setIsOrganization(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                fetchCommits(1);
+              }
             }}
             placeholder="GitHub username or organization"
             className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-white placeholder:text-white/50"

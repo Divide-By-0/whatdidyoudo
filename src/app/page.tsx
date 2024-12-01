@@ -6,15 +6,16 @@ export default function HomePage() {
   const [username, setUsername] = useState("");
   const [timeframe, setTimeframe] = useState("week");
   const [customDays, setCustomDays] = useState("1");
-  const [commits, setCommits] = useState<Array<{ repo: string; message: string; date: string; timestamp: number }>>([]);
+  const [commits, setCommits] = useState<Array<{ repo: string; message: string; date: string; timestamp: number; author: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+  const [isOrganization, setIsOrganization] = useState<boolean | null>(null);
 
   async function fetchCommits(pageNum = 1) {
     if (!username) {
-      setError("Please enter a GitHub username");
+      setError("Please enter a GitHub username or organization");
       return;
     }
 
@@ -47,54 +48,70 @@ export default function HomePage() {
           fromDate.setDate(now.getDate() - Number(customDays));
           break;
       }
+      // First check if it's an organization or user
+      const checkResponse = await fetch(`https://api.github.com/users/${username}`, {
+        headers: {
+          Accept: "application/vnd.github+json"
+        }
+      });
+
+      if (!checkResponse.ok) throw new Error("Invalid username or organization");
+      
+      const userData = await checkResponse.json();
+      const isOrg = userData.type === "Organization";
+      setIsOrganization(isOrg);
 
       const dateString = `>${fromDate.toISOString().split('T')[0]}`;
-      const query = `author:${username} committer-date:${dateString}`;
-      
+      const query = isOrg 
+        ? `org:${username} committer-date:${dateString}`
+        : `author:${username} committer-date:${dateString}`;
+
       const response = await fetch(
-        `https://api.github.com/search/commits?q=${encodeURIComponent(query)}&sort=committer-date&order=desc&page=${pageNum}&per_page=30`,
+        `https://api.github.com/search/commits?q=${encodeURIComponent(query)}&sort=committer-date&order=desc&page=${pageNum}&per_page=50`,
         {
           headers: {
             Accept: "application/vnd.github.cloak-preview+json"
           }
         }
       );
-      
-      const contentType = response.headers.get("content-type");
-      if (!contentType?.includes("application/json")) {
-        throw new Error("API returned invalid response format");
-      }
-      
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message);
-      
-      const formattedCommits = data.items.map((item: any) => {
-        const date = new Date(item.commit.author.date);
-        return {
-          repo: item.repository.full_name,
-          message: item.commit.message,
-          date: date.toLocaleDateString(),
-          timestamp: date.getTime()
-        };
-      }).sort((a: { timestamp: number }, b: { timestamp: number }) => b.timestamp - a.timestamp);
-      
-      const linkHeader = response.headers.get("link");
-      setHasMore(linkHeader?.includes('rel="next"') ?? false);
-      
-      if (pageNum === 1) {
-        setCommits(formattedCommits);
-      } else {
-        setCommits(prev => [...prev, ...formattedCommits].sort((a, b) => b.timestamp - a.timestamp));
-      }
-      setPage(pageNum);
+
+      if (!response.ok) throw new Error("Failed to fetch commits");
+      return await processResponse(response, pageNum);
+
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch commits");
       if (pageNum === 1) {
         setCommits([]);
+        setIsOrganization(null);
       }
     } finally {
       setLoading(false);
     }
+  }
+
+  async function processResponse(response: Response, pageNum: number) {
+    const data = await response.json();
+    
+    const formattedCommits = data.items.map((item: any) => {
+      const date = new Date(item.commit.author.date);
+      return {
+        repo: item.repository.full_name,
+        message: item.commit.message,
+        date: date.toLocaleDateString(),
+        timestamp: date.getTime(),
+        author: item.author?.login || item.commit.author.name
+      };
+    }).sort((a: { timestamp: number }, b: { timestamp: number }) => b.timestamp - a.timestamp);
+    
+    const linkHeader = response.headers.get("link");
+    setHasMore(linkHeader?.includes('rel="next"') ?? false);
+    
+    if (pageNum === 1) {
+      setCommits(formattedCommits);
+    } else {
+      setCommits(prev => [...prev, ...formattedCommits].sort((a, b) => b.timestamp - a.timestamp));
+    }
+    setPage(pageNum);
   }
 
   const loadMore = () => {
@@ -110,7 +127,7 @@ export default function HomePage() {
 
         {username && (
           <h2 className="mb-6 text-center text-2xl">
-            What did <span className="font-bold text-blue-400">{username}</span> do in the last {timeframe === "custom" ? `${customDays} day${Number(customDays) > 1 ? 's' : ''}` : timeframe}?
+            What {isOrganization ? 'happened in' : 'did'} <span className="font-bold text-blue-400">{username}</span> {isOrganization ? 'in' : 'do in'} the last {timeframe === "custom" ? `${customDays} day${Number(customDays) > 1 ? 's' : ''}` : timeframe}?
           </h2>
         )}
         
@@ -122,8 +139,9 @@ export default function HomePage() {
               setUsername(e.target.value);
               setPage(1);
               setCommits([]);
+              setIsOrganization(null);
             }}
-            placeholder="GitHub username"
+            placeholder="GitHub username or organization"
             className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-white placeholder:text-white/50"
           />
           
@@ -179,7 +197,10 @@ export default function HomePage() {
               <div key={index} className="rounded-lg bg-white/10 p-4">
                 <div className="font-semibold">{commit.repo}</div>
                 <div className="text-sm text-white/80">{commit.message}</div>
-                <div className="text-xs text-white/60">{commit.date}</div>
+                <div className="flex justify-between text-xs text-white/60">
+                  <span>{commit.date}</span>
+                  <span>by {commit.author}</span>
+                </div>
               </div>
             ))}
             

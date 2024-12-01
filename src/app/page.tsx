@@ -18,6 +18,7 @@ export default function HomePage() {
   const [hasMore, setHasMore] = useState(false);
   const [isOrganization, setIsOrganization] = useState<boolean | null>(null);
   const [repoBranches, setRepoBranches] = useState<Record<string, Branch[]>>({});
+  const [userOrgs, setUserOrgs] = useState<Set<string>>(new Set());
 
   async function fetchCommits(pageNum = 1) {
     if (!username) {
@@ -54,7 +55,6 @@ export default function HomePage() {
           fromDate.setDate(now.getDate() - Number(customDays));
           break;
       }
-      // First check if it's an organization or user
       const checkResponse = await fetch(`https://api.github.com/users/${username}`, {
         headers: {
           Accept: "application/vnd.github+json"
@@ -66,6 +66,25 @@ export default function HomePage() {
       const userData = await checkResponse.json();
       const isOrg = userData.type === "Organization";
       setIsOrganization(isOrg);
+
+      const allOrgs = new Set<string>();
+
+      if (!isOrg) {
+        const orgsResponse = await fetch(`https://api.github.com/users/${username}/orgs`, {
+          headers: {
+            Accept: "application/vnd.github+json"
+          }
+        });
+        if (orgsResponse.ok) {
+          const orgsData = await orgsResponse.json();
+          orgsData.forEach((org: any) => {
+            allOrgs.add(JSON.stringify({
+              login: org.login, 
+              avatar_url: org.avatar_url
+            }));
+          });
+        }
+      }
 
       const dateString = `>${fromDate.toISOString().split('T')[0]}`;
       const query = isOrg 
@@ -83,21 +102,54 @@ export default function HomePage() {
       );
 
       if (!response.ok) throw new Error("Failed to fetch commits");
-      return await processResponse(response, pageNum);
+      
+      return await processResponse(response, pageNum, allOrgs);
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch commits");
       if (pageNum === 1) {
         setCommits([]);
         setIsOrganization(null);
+        setUserOrgs(new Set());
       }
     } finally {
       setLoading(false);
     }
   }
 
-  async function processResponse(response: Response, pageNum: number) {
+  async function processResponse(response: Response, pageNum: number, existingOrgs: Set<string>) {
     const data = await response.json();
+    
+    // Use the passed in Set of existing organizations
+    const newInferredOrgs = new Set(existingOrgs);
+    
+    await Promise.all(data.items.map(async (item: any) => {
+      const repoFullName = item.repository.full_name;
+      const [orgName] = repoFullName.split('/');
+      if (orgName !== username) {
+        try {
+          const checkResponse = await fetch(`https://api.github.com/users/${orgName}`, {
+            headers: {
+              Accept: "application/vnd.github+json"
+            }
+          });
+          if (checkResponse.ok) {
+            const userData = await checkResponse.json();
+            if (userData.type === "Organization") {
+              newInferredOrgs.add(JSON.stringify({
+                login: userData.login,
+                avatar_url: userData.avatar_url
+              }));
+            }
+          }
+        } catch (error) {
+          console.error(`Failed to check organization status for ${orgName}:`, error);
+        }
+      }
+    }));
+
+    // Set organizations only after all processing is complete
+    setUserOrgs(newInferredOrgs);
     
     const repoCommits = data.items.reduce((acc: Record<string, any[]>, item: any) => {
       const repoName = item.repository.full_name;
@@ -186,6 +238,24 @@ export default function HomePage() {
             "What did you get done?"
           )}
         </h1>
+
+        {!isOrganization && (userOrgs.size > 0) && (
+          <div className="mb-6">
+            <h2 className="mb-3 text-lg font-semibold">Organizations:</h2>
+            <div className="flex flex-wrap gap-4">
+              {Array.from(userOrgs).map((org) => {
+                const parsedOrg = JSON.parse(org);
+                return (
+                  <div key={parsedOrg.login} className="flex items-center gap-2 rounded-lg bg-white/10 p-2">
+                    <img src={parsedOrg.avatar_url} alt={parsedOrg.login} className="h-6 w-6 rounded-full" />
+                    <span>{parsedOrg.login}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="mb-8 flex flex-col gap-4 sm:flex-row">
           <input
             type="text"
@@ -195,6 +265,7 @@ export default function HomePage() {
               setPage(1);
               setCommits([]);
               setIsOrganization(null);
+              setUserOrgs(new Set());
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {

@@ -52,7 +52,7 @@ export default function HomePage() {
       const query = `author:${username} committer-date:${dateString}`;
       
       const response = await fetch(
-        `https://api.github.com/search/commits?q=${encodeURIComponent(query)}&page=${pageNum}&per_page=30`,
+        `https://api.github.com/search/commits?q=${encodeURIComponent(query)}&sort=committer-date&order=desc&page=${pageNum}&per_page=30`,
         {
           headers: {
             Accept: "application/vnd.github.cloak-preview+json"

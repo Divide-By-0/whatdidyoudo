@@ -2,16 +2,22 @@
 
 import { useState } from "react";
 
+interface Branch {
+  name: string;
+  sha: string;
+}
+
 export default function HomePage() {
   const [username, setUsername] = useState("");
   const [timeframe, setTimeframe] = useState("week");
   const [customDays, setCustomDays] = useState("1");
-  const [commits, setCommits] = useState<Array<{ repo: string; message: string; date: string; timestamp: number; author: string }>>([]);
+  const [commits, setCommits] = useState<Array<{ repo: string; message: string; date: string; timestamp: number; author: string; branch: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
   const [isOrganization, setIsOrganization] = useState<boolean | null>(null);
+  const [repoBranches, setRepoBranches] = useState<Record<string, Branch[]>>({});
 
   async function fetchCommits(pageNum = 1) {
     if (!username) {
@@ -63,14 +69,15 @@ export default function HomePage() {
 
       const dateString = `>${fromDate.toISOString().split('T')[0]}`;
       const query = isOrg 
-        ? `org:${username} committer-date:${dateString}`
-        : `author:${username} committer-date:${dateString}`;
+        ? `org:${username} committer-date:${dateString} merge:false`
+        : `author:${username} committer-date:${dateString} merge:false`;
 
       const response = await fetch(
         `https://api.github.com/search/commits?q=${encodeURIComponent(query)}&sort=committer-date&order=desc&page=${pageNum}&per_page=50`,
         {
           headers: {
-            Accept: "application/vnd.github.cloak-preview+json"
+            Accept: "application/vnd.github.cloak-preview+json",
+            "X-GitHub-Api-Version": "2022-11-28"
           }
         }
       );
@@ -92,17 +99,66 @@ export default function HomePage() {
   async function processResponse(response: Response, pageNum: number) {
     const data = await response.json();
     
+    const repoCommits = data.items.reduce((acc: Record<string, any[]>, item: any) => {
+      const repoName = item.repository.full_name;
+      if (!acc[repoName]) {
+        acc[repoName] = [];
+      }
+      acc[repoName].push(item);
+      return acc;
+    }, {});
+
+    const newRepoBranches = { ...repoBranches };
+    await Promise.all(
+      Object.keys(repoCommits).map(async (repoName) => {
+        if (!newRepoBranches[repoName]) {
+          try {
+            const branchResponse = await fetch(
+              `https://api.github.com/repos/${repoName}/branches`,
+              {
+                headers: {
+                  Accept: "application/vnd.github+json",
+                  "X-GitHub-Api-Version": "2022-11-28"
+                }
+              }
+            );
+            if (branchResponse.ok) {
+              const branches = await branchResponse.json();
+              newRepoBranches[repoName] = branches.map((b: any) => ({
+                name: b.name,
+                sha: b.commit.sha
+              }));
+            }
+          } catch (error) {
+            console.error(`Failed to fetch branches for ${repoName}:`, error);
+            newRepoBranches[repoName] = [];
+          }
+        }
+      })
+    );
+    setRepoBranches(newRepoBranches);
+
     const formattedCommits = data.items.map((item: any) => {
       const date = new Date(item.commit.author.date);
+      const repoName = item.repository.full_name;
+      
+      let branch = 'main';
+      const repoBranchList = newRepoBranches[repoName] || [];
+      const matchingBranch = repoBranchList.find((b: Branch) => b.sha === item.sha);
+      if (matchingBranch) {
+        branch = matchingBranch.name;
+      }
+
       return {
-        repo: item.repository.full_name,
+        repo: repoName,
         message: item.commit.message,
         date: date.toLocaleDateString(),
         timestamp: date.getTime(),
-        author: item.author?.login || item.commit.author.name
+        author: item.author?.login || item.commit.author.name,
+        branch: branch
       };
     }).sort((a: { timestamp: number }, b: { timestamp: number }) => b.timestamp - a.timestamp);
-    
+
     const linkHeader = response.headers.get("link");
     setHasMore(linkHeader?.includes('rel="next"') ?? false);
     
@@ -203,7 +259,7 @@ export default function HomePage() {
                 <div className="text-sm text-white/80">{commit.message}</div>
                 <div className="flex justify-between text-xs text-white/60">
                   <span>{commit.date}</span>
-                  <span>by {commit.author}</span>
+                  <span>by {commit.author} on {commit.branch}</span>
                 </div>
               </div>
             ))}

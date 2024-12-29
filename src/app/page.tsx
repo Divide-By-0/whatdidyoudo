@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { EnrichedCommit } from "../lib/github";
 import ReactMarkdown from 'react-markdown';
 
@@ -27,13 +27,20 @@ export default function HomePage() {
   }>({ defaultBranch: [], otherBranches: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [showNonDefaultBranches, setShowNonDefaultBranches] = useState(false);
   const [isOrganization, setIsOrganization] = useState<boolean | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
   const [summary, setSummary] = useState("");
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState("");
+
+  const allCommits = useMemo(() => {
+    const combined = [...commits.defaultBranch, ...commits.otherBranches];
+    return combined.sort((a, b) => new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime());
+  }, [commits.defaultBranch, commits.otherBranches]);
+
+  const uniqueRepos = useMemo(() => new Set(allCommits.map(commit => commit.repository.nameWithOwner)).size, [allCommits]);
+  const uniqueBranches = useMemo(() => new Set(allCommits.map(commit => `${commit.repository.nameWithOwner}:${commit.branch}`)).size, [allCommits]);
 
   async function checkIfOrganization(name: string): Promise<boolean> {
     setProgress({ stage: 'checking-type' });
@@ -153,13 +160,15 @@ export default function HomePage() {
     return Array.from(repoSet);
   }
 
-  async function fetchCommits() {
+  async function fetchCommits(overrideTimeframe?: string) {
     if (!username) {
       setError("Please enter a GitHub username or organization");
       return;
     }
 
-    if (timeframe === "custom" && (isNaN(Number(customDays)) || Number(customDays) < 1)) {
+    const effectiveTimeframe = overrideTimeframe || timeframe;
+
+    if (effectiveTimeframe === "custom" && (isNaN(Number(customDays)) || Number(customDays) < 1)) {
       setError("Please enter a valid number of days (minimum 1)");
       return;
     }
@@ -180,7 +189,7 @@ export default function HomePage() {
       const now = new Date();
       let fromDate = new Date();
 
-      switch (timeframe) {
+      switch (effectiveTimeframe) {
         case "24h":
           fromDate.setHours(now.getHours() - 24);
           break;
@@ -197,6 +206,7 @@ export default function HomePage() {
           fromDate.setDate(now.getDate() - Number(customDays));
           break;
       }
+      console.log(effectiveTimeframe, fromDate);
 
       // Get repositories based on whether this is a user or organization
       const repos = isOrg 
@@ -217,7 +227,7 @@ export default function HomePage() {
       
       // Then fetch detailed commit information from our server
       const response = await fetch(
-        `/api/github/commits?${new URLSearchParams({
+        `/api/commits?${new URLSearchParams({
           username,
           from: fromDate.toISOString(),
           repos: JSON.stringify(repos),
@@ -296,7 +306,7 @@ export default function HomePage() {
     setSummary("");
 
     try {
-      const response = await fetch('/api/ai/summary', {
+      const response = await fetch('/api/summary', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -336,8 +346,6 @@ export default function HomePage() {
     }
   }
 
-  const displayedCommits = showNonDefaultBranches ? commits.otherBranches : commits.defaultBranch;
-
   return (
     <main className="flex min-h-screen flex-col items-center bg-black p-8 text-white">
       <div className="w-full max-w-4xl">
@@ -372,9 +380,12 @@ export default function HomePage() {
           <select
             value={timeframe}
             onChange={(e) => {
-              setTimeframe(e.target.value);
+              const newTimeframe = e.target.value;
+              setTimeframe(newTimeframe);
               setCommits({ defaultBranch: [], otherBranches: [] });
-              if (hasSearched) fetchCommits();
+              if (hasSearched) {
+                fetchCommits(newTimeframe);
+              }
             }}
             className="rounded-lg bg-white/10 px-4 py-2 text-white"
           >
@@ -442,8 +453,8 @@ export default function HomePage() {
 
         <div className="my-8">
           <button
-            onClick={() => generateSummary(displayedCommits)}
-            disabled={summaryLoading || displayedCommits.length === 0}
+            onClick={() => generateSummary(allCommits)}
+            disabled={summaryLoading || allCommits.length === 0}
             className="mb-4 rounded-lg bg-blue-500 px-6 py-2 font-semibold hover:bg-blue-600 disabled:opacity-50"
           >
             {summaryLoading ? "Generating Summary..." : "Generate AI Summary"}
@@ -476,7 +487,7 @@ export default function HomePage() {
           )}
         </div>
 
-        {hasSearched && !loading && !error && commits.defaultBranch.length === 0 && commits.otherBranches.length === 0 && username && (
+        {hasSearched && !loading && !error && allCommits.length === 0 && username && (
           <div className="mb-4 rounded-lg bg-yellow-500/20 p-4 text-yellow-200">
             No commits found in the selected time period. Try:
             <ul className="mt-2 list-disc pl-6">
@@ -487,27 +498,17 @@ export default function HomePage() {
           </div>
         )}
 
-        {(commits.defaultBranch.length > 0 || commits.otherBranches.length > 0) && (
+        {allCommits.length > 0 && (
           <>
-            <div className="mb-4 flex items-center justify-between">
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setShowNonDefaultBranches(false)}
-                  className={`rounded-lg px-4 py-2 ${!showNonDefaultBranches ? 'bg-blue-500' : 'bg-white/10'}`}
-                >
-                  Default Branch ({commits.defaultBranch.length})
-                </button>
-                <button
-                  onClick={() => setShowNonDefaultBranches(true)}
-                  className={`rounded-lg px-4 py-2 ${showNonDefaultBranches ? 'bg-blue-500' : 'bg-white/10'}`}
-                >
-                  Other Branches ({commits.otherBranches.length})
-                </button>
-              </div>
+            <div className="mb-6 rounded-lg bg-white/5 p-4 text-center">
+              <p className="text-lg text-white/90">
+                <span className="font-bold text-blue-400">{allCommits.length}</span> commits across{' '}
+                <span className="font-bold text-blue-400">{uniqueRepos}</span> repositories on{' '}
+                <span className="font-bold text-blue-400">{uniqueBranches}</span> branches
+              </p>
             </div>
-
             <div className="space-y-4">
-              {displayedCommits.map((commit, index) => (
+              {allCommits.map((commit, index) => (
                 <div key={`${commit.oid}-${index}`} className="rounded-lg bg-white/10 p-4">
                   <div className="font-semibold">{commit.repository.nameWithOwner}</div>
                   <div className="text-sm text-white/80">{commit.messageHeadline}</div>

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { fetchRepoCommits, EnrichedCommit } from "../../../../lib/github";
-import { env } from "../../../../env";
+import { fetchRepoCommits, EnrichedCommit } from "../../../lib/github";
+import { env } from "../../../env";
 
 const BATCH_SIZE = 3; // Number of repos to process in parallel
 const RATE_LIMIT_DELAY = 1000; // 1 second delay between batches

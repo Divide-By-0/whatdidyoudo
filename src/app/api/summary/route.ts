@@ -1,5 +1,5 @@
 import { OpenAI } from 'openai';
-import { EnrichedCommit } from '../../../../lib/github';
+import { EnrichedCommit } from '../../../lib/github';
 import { NextResponse } from 'next/server';
 
 const openai = new OpenAI({

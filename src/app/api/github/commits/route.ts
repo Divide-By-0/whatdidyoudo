@@ -47,57 +47,86 @@ export async function GET(request: Request) {
       otherBranches: []
     };
 
-    for (let i = 0; i < repos.length; i += BATCH_SIZE) {
-      const batch = repos.slice(i, i + BATCH_SIZE);
-      const batchPromises = batch.map((repo: string) => 
-        fetchRepoCommits(repo, env.GITHUB_TOKEN, startDate)
-      );
+    // Create a transform stream to send progress updates
+    const stream = new TransformStream();
+    const writer = stream.writable.getWriter();
+    const encoder = new TextEncoder();
 
-      const batchResults = await Promise.all(batchPromises);
+    // Start processing in the background
+    const processPromise = (async () => {
+      try {
+        for (let i = 0; i < repos.length; i += BATCH_SIZE) {
+          const batch = repos.slice(i, i + BATCH_SIZE);
+          const batchPromises = batch.map((repo: string) => 
+            fetchRepoCommits(repo, env.GITHUB_TOKEN, startDate)
+          );
 
-      batchResults.forEach((result) => {
-        const repository = result.data.repository;
-        const defaultBranchName = repository.defaultBranchRef.name;
+          const batchResults = await Promise.all(batchPromises);
 
-        repository.refs.nodes.forEach((branch) => {
-          if (branch.target && branch.target.history) {
-            // For organizations, include all commits. For users, filter by author
-            const commits = branch.target.history.nodes
-              .filter(commit => isOrg || commit.author.user?.login?.toLowerCase() === username.toLowerCase())
-              .map(commit => ({
-                ...commit,
-                repository: {
-                  name: repository.name,
-                  nameWithOwner: repository.nameWithOwner,
-                },
-                branch: branch.name,
-              }));
+          batchResults.forEach((result) => {
+            const repository = result.data.repository;
+            const defaultBranchName = repository.defaultBranchRef.name;
 
-            if (branch.name === defaultBranchName) {
-              allCommits.defaultBranch.push(...commits);
-            } else {
-              // Only include unmerged commits from non-default branches
-              allCommits.otherBranches.push(...commits);
-            }
+            repository.refs.nodes.forEach((branch) => {
+              if (branch.target && branch.target.history) {
+                // For organizations, include all commits. For users, filter by author
+                const commits = branch.target.history.nodes
+                  .filter(commit => isOrg || commit.author.user?.login?.toLowerCase() === username.toLowerCase())
+                  .map(commit => ({
+                    ...commit,
+                    repository: {
+                      name: repository.name,
+                      nameWithOwner: repository.nameWithOwner,
+                    },
+                    branch: branch.name,
+                  }));
+
+                if (branch.name === defaultBranchName) {
+                  allCommits.defaultBranch.push(...commits);
+                } else {
+                  // Only include unmerged commits from non-default branches
+                  allCommits.otherBranches.push(...commits);
+                }
+              }
+            });
+          });
+
+          // Send progress update
+          await writer.write(
+            encoder.encode(`data: ${Math.min(i + BATCH_SIZE, repos.length)} of ${repos.length} repositories processed\n\n`)
+          );
+
+          // Add delay between batches to respect rate limits
+          if (i + BATCH_SIZE < repos.length) {
+            await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
           }
-        });
-      });
+        }
 
-      // Add delay between batches to respect rate limits
-      if (i + BATCH_SIZE < repos.length) {
-        await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
+        // Sort commits by date
+        allCommits.defaultBranch.sort((a, b) => 
+          new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime()
+        );
+        allCommits.otherBranches.sort((a, b) => 
+          new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime()
+        );
+
+        // Send the final data
+        await writer.write(
+          encoder.encode(`data: ${JSON.stringify(allCommits)}\n\n`)
+        );
+      } finally {
+        await writer.close();
       }
-    }
+    })();
 
-    // Sort commits by date
-    allCommits.defaultBranch.sort((a, b) => 
-      new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime()
-    );
-    allCommits.otherBranches.sort((a, b) => 
-      new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime()
-    );
+    return new Response(stream.readable, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      },
+    });
 
-    return NextResponse.json(allCommits);
   } catch (error: any) {
     console.error("Error fetching commits:", error);
     return NextResponse.json(

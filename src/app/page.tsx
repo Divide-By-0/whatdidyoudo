@@ -8,6 +8,14 @@ interface Branch {
   sha: string;
 }
 
+interface Progress {
+  stage: 'checking-type' | 'finding-repos' | 'fetching-commits';
+  reposFound?: number;
+  reposProcessed?: number;
+  totalRepos?: number;
+  message?: string;
+}
+
 export default function HomePage() {
   const [username, setUsername] = useState("");
   const [timeframe, setTimeframe] = useState("week");
@@ -20,8 +28,11 @@ export default function HomePage() {
   const [error, setError] = useState("");
   const [showNonDefaultBranches, setShowNonDefaultBranches] = useState(false);
   const [isOrganization, setIsOrganization] = useState<boolean | null>(null);
+  const [progress, setProgress] = useState<Progress | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
 
   async function checkIfOrganization(name: string): Promise<boolean> {
+    setProgress({ stage: 'checking-type' });
     try {
       const response = await fetch(`https://api.github.com/orgs/${name}`);
       return response.ok;
@@ -34,6 +45,8 @@ export default function HomePage() {
     const repoSet = new Set<string>();
     let page = 1;
     let hasMore = true;
+
+    setProgress({ stage: 'finding-repos', reposFound: 0 });
 
     while (hasMore) {
       const response = await fetch(
@@ -53,6 +66,10 @@ export default function HomePage() {
       repos.forEach((repo: any) => {
         if (new Date(repo.pushed_at) >= new Date(since)) {
           repoSet.add(repo.full_name);
+          setProgress(prev => prev?.stage === 'finding-repos' 
+            ? { ...prev, reposFound: repoSet.size }
+            : prev
+          );
         }
       });
 
@@ -63,6 +80,9 @@ export default function HomePage() {
   }
 
   async function fetchUserRepos(username: string, since: string): Promise<string[]> {
+    const repoSet = new Set<string>();
+    setProgress({ stage: 'finding-repos', reposFound: 0 });
+
     // First try the events API to get recent activity
     const eventsResponse = await fetch(
       `https://api.github.com/users/${username}/events/public`
@@ -73,12 +93,15 @@ export default function HomePage() {
     }
 
     const events = await eventsResponse.json();
-    const repoSet = new Set<string>();
 
     // Get repos from push events
     events.forEach((event: any) => {
       if (event.repo) {
         repoSet.add(event.repo.name);
+        setProgress(prev => prev?.stage === 'finding-repos' 
+          ? { ...prev, reposFound: repoSet.size }
+          : prev
+        );
       }
     });
 
@@ -92,6 +115,10 @@ export default function HomePage() {
       repos.forEach((repo: any) => {
         if (new Date(repo.pushed_at) >= new Date(since)) {
           repoSet.add(repo.full_name);
+          setProgress(prev => prev?.stage === 'finding-repos' 
+            ? { ...prev, reposFound: repoSet.size }
+            : prev
+          );
         }
       });
     }
@@ -111,6 +138,10 @@ export default function HomePage() {
       contributedData.items?.forEach((item: any) => {
         if (item.repository) {
           repoSet.add(item.repository.full_name);
+          setProgress(prev => prev?.stage === 'finding-repos' 
+            ? { ...prev, reposFound: repoSet.size }
+            : prev
+          );
         }
       });
     }
@@ -131,6 +162,9 @@ export default function HomePage() {
 
     setLoading(true);
     setError("");
+    setProgress(null);
+    setCommits({ defaultBranch: [], otherBranches: [] });
+    setHasSearched(true);
     
     try {
       // First check if this is an organization
@@ -163,6 +197,18 @@ export default function HomePage() {
       const repos = isOrg 
         ? await fetchOrganizationRepos(username, fromDate.toISOString())
         : await fetchUserRepos(username, fromDate.toISOString());
+
+      if (repos.length === 0) {
+        setError(`No repositories with recent activity found for ${isOrg ? 'organization' : 'user'} "${username}"`);
+        return;
+      }
+
+      setProgress({ 
+        stage: 'fetching-commits', 
+        reposProcessed: 0, 
+        totalRepos: repos.length,
+        message: 'Starting to process repositories...'
+      });
       
       // Then fetch detailed commit information from our server
       const response = await fetch(
@@ -179,8 +225,55 @@ export default function HomePage() {
         throw new Error(errorData.error || 'Failed to fetch commits');
       }
 
-      const data = await response.json();
-      setCommits(data);
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error('Failed to read response stream');
+      }
+
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value as Uint8Array, { stream: true });
+        const lines = buffer.split('\n');
+        
+        // Process all complete lines
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i]?.trim();
+          if (line?.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (typeof data === 'string' && data.includes('repositories processed')) {
+              // This is a progress update
+              const matches = data.match(/(\d+) of (\d+)/);
+              if (matches) {
+                const [, processed, total] = matches;
+                setProgress(prev => prev?.stage === 'fetching-commits'
+                  ? { 
+                      ...prev, 
+                      reposProcessed: parseInt(processed ?? "0", 10),
+                      message: data
+                    }
+                  : prev
+                );
+              }
+            } else if (typeof data === 'string') {
+              try {
+                // This should be the final data
+                const commitData = JSON.parse(data);
+                setCommits(commitData);
+              } catch (e) {
+                console.error('Failed to parse commit data:', e);
+              }
+            }
+          }
+        }
+        
+        // Keep the last incomplete line in the buffer
+        buffer = lines[lines.length - 1] ?? "";
+      }
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch commits");
@@ -188,6 +281,7 @@ export default function HomePage() {
       setIsOrganization(null);
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   }
 
@@ -212,6 +306,8 @@ export default function HomePage() {
               setUsername(e.target.value);
               setCommits({ defaultBranch: [], otherBranches: [] });
               setIsOrganization(null);
+              setProgress(null);
+              setHasSearched(false);
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -227,6 +323,7 @@ export default function HomePage() {
             onChange={(e) => {
               setTimeframe(e.target.value);
               setCommits({ defaultBranch: [], otherBranches: [] });
+              if (hasSearched) fetchCommits();
             }}
             className="rounded-lg bg-white/10 px-4 py-2 text-white"
           >
@@ -263,6 +360,43 @@ export default function HomePage() {
         {error && (
           <div className="mb-4 rounded-lg bg-red-500/20 p-4 text-red-200">
             {error}
+          </div>
+        )}
+
+        {progress && (
+          <div className="mb-4 rounded-lg bg-blue-500/20 p-4 text-blue-200">
+            {progress.stage === 'checking-type' && (
+              <p>Checking if {username} is a user or organization...</p>
+            )}
+            {progress.stage === 'finding-repos' && (
+              <p>Found {progress.reposFound} repositories with recent activity...</p>
+            )}
+            {progress.stage === 'fetching-commits' && (
+              <div>
+                <p>{progress.message}</p>
+                {progress.reposProcessed !== undefined && progress.totalRepos && (
+                  <div className="mt-2 h-2 w-full rounded-full bg-blue-900">
+                    <div 
+                      className="h-full rounded-full bg-blue-500 transition-all duration-300"
+                      style={{ 
+                        width: `${(progress.reposProcessed / progress.totalRepos) * 100}%` 
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {hasSearched && !loading && !error && commits.defaultBranch.length === 0 && commits.otherBranches.length === 0 && username && (
+          <div className="mb-4 rounded-lg bg-yellow-500/20 p-4 text-yellow-200">
+            No commits found in the selected time period. Try:
+            <ul className="mt-2 list-disc pl-6">
+              <li>Extending the time range</li>
+              <li>Checking the username spelling</li>
+              <li>Making sure the repositories are public</li>
+            </ul>
           </div>
         )}
 

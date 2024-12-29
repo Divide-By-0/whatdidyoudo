@@ -164,6 +164,7 @@ export default function HomePage() {
       return;
     }
 
+    setSummary("");
     setLoading(true);
     setError("");
     setProgress(null);

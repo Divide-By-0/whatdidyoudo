@@ -19,6 +19,48 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showNonDefaultBranches, setShowNonDefaultBranches] = useState(false);
+  const [isOrganization, setIsOrganization] = useState<boolean | null>(null);
+
+  async function checkIfOrganization(name: string): Promise<boolean> {
+    try {
+      const response = await fetch(`https://api.github.com/orgs/${name}`);
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function fetchOrganizationRepos(orgName: string, since: string): Promise<string[]> {
+    const repoSet = new Set<string>();
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const response = await fetch(
+        `https://api.github.com/orgs/${orgName}/repos?type=all&sort=pushed&direction=desc&per_page=100&page=${page}`
+      );
+
+      if (!response.ok) {
+        break;
+      }
+
+      const repos = await response.json();
+      if (repos.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      repos.forEach((repo: any) => {
+        if (new Date(repo.pushed_at) >= new Date(since)) {
+          repoSet.add(repo.full_name);
+        }
+      });
+
+      page++;
+    }
+
+    return Array.from(repoSet);
+  }
 
   async function fetchUserRepos(username: string, since: string): Promise<string[]> {
     // First try the events API to get recent activity
@@ -78,7 +120,7 @@ export default function HomePage() {
 
   async function fetchCommits() {
     if (!username) {
-      setError("Please enter a GitHub username");
+      setError("Please enter a GitHub username or organization");
       return;
     }
 
@@ -91,6 +133,10 @@ export default function HomePage() {
     setError("");
     
     try {
+      // First check if this is an organization
+      const isOrg = await checkIfOrganization(username);
+      setIsOrganization(isOrg);
+
       // Calculate the from date based on timeframe
       const now = new Date();
       let fromDate = new Date();
@@ -113,12 +159,19 @@ export default function HomePage() {
           break;
       }
 
-      // First get the list of repositories from GitHub's REST API
-      const repos = await fetchUserRepos(username, fromDate.toISOString());
+      // Get repositories based on whether this is a user or organization
+      const repos = isOrg 
+        ? await fetchOrganizationRepos(username, fromDate.toISOString())
+        : await fetchUserRepos(username, fromDate.toISOString());
       
       // Then fetch detailed commit information from our server
       const response = await fetch(
-        `/api/github/commits?username=${encodeURIComponent(username)}&from=${fromDate.toISOString()}&repos=${encodeURIComponent(JSON.stringify(repos))}`
+        `/api/github/commits?${new URLSearchParams({
+          username,
+          from: fromDate.toISOString(),
+          repos: JSON.stringify(repos),
+          isOrg: isOrg.toString()
+        })}`
       );
 
       if (!response.ok) {
@@ -132,6 +185,7 @@ export default function HomePage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch commits");
       setCommits({ defaultBranch: [], otherBranches: [] });
+      setIsOrganization(null);
     } finally {
       setLoading(false);
     }
@@ -144,7 +198,7 @@ export default function HomePage() {
       <div className="w-full max-w-4xl">
         <h1 className="mb-8 text-center text-4xl font-bold">
           {username ? (
-            <>What did <span className="font-bold text-blue-400">{username}</span> do in the last {timeframe === "custom" ? `${customDays} day${Number(customDays) > 1 ? 's' : ''}` : timeframe}?</>
+            <>What {isOrganization ? 'happened in' : 'did'} <span className="font-bold text-blue-400">{username}</span> {isOrganization ? 'in' : 'do in'} the last {timeframe === "custom" ? `${customDays} day${Number(customDays) > 1 ? 's' : ''}` : timeframe}?</>
           ) : (
             "What did you get done?"
           )}
@@ -157,13 +211,14 @@ export default function HomePage() {
             onChange={(e) => {
               setUsername(e.target.value);
               setCommits({ defaultBranch: [], otherBranches: [] });
+              setIsOrganization(null);
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
                 fetchCommits();
               }
             }}
-            placeholder="GitHub username"
+            placeholder="GitHub username or organization"
             className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-white placeholder:text-white/50"
           />
           

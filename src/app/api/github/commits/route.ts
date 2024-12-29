@@ -11,6 +11,7 @@ export async function GET(request: Request) {
     const username = searchParams.get("username");
     const fromDate = searchParams.get("from");
     const reposParam = searchParams.get("repos");
+    const isOrg = searchParams.get("isOrg") === "true";
     
     if (!username || !fromDate || !reposParam) {
       return NextResponse.json(
@@ -60,9 +61,9 @@ export async function GET(request: Request) {
 
         repository.refs.nodes.forEach((branch) => {
           if (branch.target && branch.target.history) {
-            // Filter commits by the requesting username
+            // For organizations, include all commits. For users, filter by author
             const commits = branch.target.history.nodes
-              .filter(commit => commit.author.user?.login?.toLowerCase() === username.toLowerCase())
+              .filter(commit => isOrg || commit.author.user?.login?.toLowerCase() === username.toLowerCase())
               .map(commit => ({
                 ...commit,
                 repository: {

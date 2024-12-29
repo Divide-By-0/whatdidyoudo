@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { EnrichedCommit } from "../lib/github";
+import ReactMarkdown from 'react-markdown';
 
 interface Branch {
   name: string;
@@ -30,6 +31,9 @@ export default function HomePage() {
   const [isOrganization, setIsOrganization] = useState<boolean | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [summary, setSummary] = useState("");
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState("");
 
   async function checkIfOrganization(name: string): Promise<boolean> {
     setProgress({ stage: 'checking-type' });
@@ -285,6 +289,52 @@ export default function HomePage() {
     }
   }
 
+  async function generateSummary(commits: EnrichedCommit[]) {
+    setSummaryLoading(true);
+    setSummaryError("");
+    setSummary("");
+
+    try {
+      const response = await fetch('/api/ai/summary', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ commits }),
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error('Failed to generate summary');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i]?.trim() || '';
+          if (line === '[DONE]') {
+            break;
+          }
+          setSummary(prev => prev + line + '\n');
+        }
+        
+        buffer = lines[lines.length - 1] || '';
+      }
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : 'Failed to generate summary');
+    } finally {
+      setSummaryLoading(false);
+    }
+  }
+
   const displayedCommits = showNonDefaultBranches ? commits.otherBranches : commits.defaultBranch;
 
   return (
@@ -388,6 +438,42 @@ export default function HomePage() {
             )}
           </div>
         )}
+
+        <div className="my-8">
+          <button
+            onClick={() => generateSummary(displayedCommits)}
+            disabled={summaryLoading || displayedCommits.length === 0}
+            className="mb-4 rounded-lg bg-blue-500 px-6 py-2 font-semibold hover:bg-blue-600 disabled:opacity-50"
+          >
+            {summaryLoading ? "Generating Summary..." : "Generate AI Summary"}
+          </button>
+
+          {summaryError && (
+            <div className="mb-4 rounded-lg bg-red-500/20 p-4 text-red-200">
+              {summaryError}
+            </div>
+          )}
+
+          {summary && (
+            <div className="rounded-lg bg-white/10 p-4">
+              <div className="prose prose-invert max-w-none
+                prose-p:text-white/80
+                prose-ul:text-white/80 prose-ul:list-disc prose-ul:ml-4
+                prose-li:my-0 prose-li:marker:text-blue-400
+                prose-headings:text-white prose-headings:font-semibold
+                prose-h2:text-2xl prose-h2:mb-4
+                prose-h3:text-xl prose-h3:mb-3
+                prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
+                prose-strong:text-white prose-strong:font-semibold
+                prose-code:text-yellow-200 prose-code:bg-white/5 prose-code:px-1 prose-code:rounded
+                prose-hr:border-white/10">
+                <ReactMarkdown>
+                  {summary}
+                </ReactMarkdown>
+              </div>
+            </div>
+          )}
+        </div>
 
         {hasSearched && !loading && !error && commits.defaultBranch.length === 0 && commits.otherBranches.length === 0 && username && (
           <div className="mb-4 rounded-lg bg-yellow-500/20 p-4 text-yellow-200">

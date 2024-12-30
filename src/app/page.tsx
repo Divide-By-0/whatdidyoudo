@@ -1,232 +1,444 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo, useEffect } from "react";
+import { EnrichedCommit } from "../lib/github";
+import ReactMarkdown from 'react-markdown';
 
-interface Branch {
-  name: string;
-  sha: string;
+interface Progress {
+  stage: 'checking-type' | 'finding-repos' | 'fetching-commits' | 'fetching-issues';
+  reposFound?: number;
+  reposProcessed?: number;
+  totalRepos?: number;
+  message?: string;
+}
+
+interface IssueOrPR {
+  id: number;
+  title: string;
+  number: number;
+  state: string;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+  repository: {
+    nameWithOwner: string;
+  };
+  type: 'issue' | 'pr';
 }
 
 export default function HomePage() {
   const [username, setUsername] = useState("");
   const [timeframe, setTimeframe] = useState("week");
   const [customDays, setCustomDays] = useState("1");
-  const [commits, setCommits] = useState<Array<{ repo: string; message: string; date: string; timestamp: number; author: string; branch: string }>>([]);
+  const [commits, setCommits] = useState<{
+    defaultBranch: EnrichedCommit[];
+    otherBranches: EnrichedCommit[];
+  }>({ defaultBranch: [], otherBranches: [] });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
   const [isOrganization, setIsOrganization] = useState<boolean | null>(null);
-  const [repoBranches, setRepoBranches] = useState<Record<string, Branch[]>>({});
-  const [userOrgs, setUserOrgs] = useState<Set<string>>(new Set());
+  const [progress, setProgress] = useState<Progress | null>(null);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [summary, setSummary] = useState("");
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryError, setSummaryError] = useState("");
+  const [issuesAndPRs, setIssuesAndPRs] = useState<IssueOrPR[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
+  const [useAnthropic, setUseAnthropic] = useState(false);
 
-  async function fetchCommits(pageNum = 1) {
+  const allCommits = useMemo(() => {
+    const commitMap = new Map<string, EnrichedCommit>();
+    
+    [...commits.defaultBranch, ...commits.otherBranches].forEach(commit => {
+      if (!commitMap.has(commit.oid)) {
+        commitMap.set(commit.oid, commit);
+      }
+    });
+    
+    return Array.from(commitMap.values())
+      .sort((a, b) => new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime());
+  }, [commits.defaultBranch, commits.otherBranches]);
+
+  const uniqueRepos = useMemo(() => new Set(allCommits.map(commit => commit.repository.nameWithOwner)).size, [allCommits]);
+  const uniqueBranches = useMemo(() => new Set(allCommits.map(commit => `${commit.repository.nameWithOwner}:${commit.branch}`)).size, [allCommits]);
+
+  const paginatedItems = useMemo(() => {
+    const allItems = [...allCommits, ...issuesAndPRs].sort((a, b) => {
+      const dateA = new Date('committedDate' in a ? a.committedDate : a.updatedAt).getTime();
+      const dateB = new Date('committedDate' in b ? b.committedDate : b.updatedAt).getTime();
+      return dateB - dateA;
+    });
+
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return allItems.slice(startIndex, endIndex);
+  }, [allCommits, issuesAndPRs, currentPage]);
+
+  const totalPages = useMemo(() => {
+    return Math.ceil((allCommits.length + issuesAndPRs.length) / itemsPerPage);
+  }, [allCommits.length, issuesAndPRs.length]);
+
+  const handlePageChange = (newPage: number) => {
+    setCurrentPage(newPage);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [username, timeframe, customDays]);
+
+  async function checkIfOrganization(name: string): Promise<boolean> {
+    setProgress({ stage: 'checking-type' });
+    try {
+      const response = await fetch(`https://api.github.com/orgs/${name}`);
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function fetchOrganizationRepos(orgName: string, since: string): Promise<string[]> {
+    const repoSet = new Set<string>();
+    let page = 1;
+    let hasMore = true;
+
+    setProgress({ stage: 'finding-repos', reposFound: 0 });
+
+    while (hasMore) {
+      const response = await fetch(
+        `https://api.github.com/orgs/${orgName}/repos?type=all&sort=pushed&direction=desc&per_page=100&page=${page}`
+      );
+
+      if (!response.ok) {
+        break;
+      }
+
+      const repos = await response.json();
+      if (repos.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      repos.forEach((repo: any) => {
+        if (new Date(repo.pushed_at) >= new Date(since)) {
+          repoSet.add(repo.full_name);
+          setProgress(prev => prev?.stage === 'finding-repos' 
+            ? { ...prev, reposFound: repoSet.size }
+            : prev
+          );
+        }
+      });
+
+      page++;
+    }
+
+    return Array.from(repoSet);
+  }
+
+  async function fetchUserRepos(username: string, since: string): Promise<string[]> {
+    const repoSet = new Set<string>();
+    setProgress({ stage: 'finding-repos', reposFound: 0 });
+
+    // First try the events API to get recent activity
+    const eventsResponse = await fetch(
+      `https://api.github.com/users/${username}/events/public`
+    );
+    
+    if (!eventsResponse.ok) {
+      throw new Error(`GitHub API error: ${eventsResponse.statusText}`);
+    }
+
+    const events = await eventsResponse.json();
+
+    // Get repos from push events
+    events.forEach((event: any) => {
+      if (event.repo) {
+        repoSet.add(event.repo.name);
+        setProgress(prev => prev?.stage === 'finding-repos' 
+          ? { ...prev, reposFound: repoSet.size }
+          : prev
+        );
+      }
+    });
+
+    // Also fetch user's repositories to catch any that might not be in recent events
+    const reposResponse = await fetch(
+      `https://api.github.com/users/${username}/repos?sort=pushed&direction=desc`
+    );
+
+    if (reposResponse.ok) {
+      const repos = await reposResponse.json();
+      repos.forEach((repo: any) => {
+        if (new Date(repo.pushed_at) >= new Date(since)) {
+          repoSet.add(repo.full_name);
+          setProgress(prev => prev?.stage === 'finding-repos' 
+            ? { ...prev, reposFound: repoSet.size }
+            : prev
+          );
+        }
+      });
+    }
+
+    // Get repositories the user has contributed to
+    const contributedReposResponse = await fetch(
+      `https://api.github.com/search/commits?q=author:${username}+committer-date:>${since}&sort=committer-date&order=desc&per_page=100`,
+      {
+        headers: {
+          'Accept': 'application/vnd.github.cloak-preview'
+        }
+      }
+    );
+
+    if (contributedReposResponse.ok) {
+      const contributedData = await contributedReposResponse.json();
+      contributedData.items?.forEach((item: any) => {
+        if (item.repository) {
+          repoSet.add(item.repository.full_name);
+          setProgress(prev => prev?.stage === 'finding-repos' 
+            ? { ...prev, reposFound: repoSet.size }
+            : prev
+          );
+        }
+      });
+    }
+
+    return Array.from(repoSet);
+  }
+
+  async function fetchIssuesAndPRs(fromDate: Date) {
+    setIssuesAndPRs([]);
+    setProgress(prev => ({ ...prev, stage: 'fetching-issues', message: 'Fetching issues and pull requests...' }));
+
+    try {
+      // Build different queries for users vs organizations
+      const query = isOrganization 
+        ? `org:${username} updated:>=${fromDate.toISOString().split('T')[0]}`  // Search in all org repos
+        : `involves:${username} updated:>=${fromDate.toISOString().split('T')[0]}`; // Search for user involvement
+
+      const response = await fetch(
+        `https://api.github.com/search/issues?${new URLSearchParams({
+          q: query,
+          sort: 'updated',
+          order: 'desc',
+          per_page: '100'
+        })}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`GitHub API error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // Transform the data into our format
+      const transformedData: IssueOrPR[] = data.items.map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        number: item.number,
+        state: item.state,
+        createdAt: item.created_at,
+        updatedAt: item.updated_at,
+        url: item.html_url,
+        repository: {
+          nameWithOwner: item.repository_url.replace('https://api.github.com/repos/', '')
+        },
+        type: item.pull_request ? 'pr' : 'issue'
+      }));
+
+      setIssuesAndPRs(transformedData);
+    } finally {
+      setProgress(prev => prev?.stage === 'fetching-issues' ? null : prev);
+    }
+  }
+
+  async function fetchCommits(overrideTimeframe?: string) {
     if (!username) {
       setError("Please enter a GitHub username or organization");
       return;
     }
 
-    if (timeframe === "custom" && (isNaN(Number(customDays)) || Number(customDays) < 1)) {
+    const effectiveTimeframe = overrideTimeframe || timeframe;
+
+    if (effectiveTimeframe === "custom" && (isNaN(Number(customDays)) || Number(customDays) < 1)) {
       setError("Please enter a valid number of days (minimum 1)");
       return;
     }
 
+    setSummary("");
     setLoading(true);
     setError("");
+    setProgress(null);
+    setCommits({ defaultBranch: [], otherBranches: [] });
+    setHasSearched(true);
+    
     try {
+      // First check if this is an organization
+      const isOrg = await checkIfOrganization(username);
+      setIsOrganization(isOrg);
+
+      // Calculate the from date based on timeframe
       const now = new Date();
       let fromDate = new Date();
-      switch (timeframe) {
+
+      switch (effectiveTimeframe) {
         case "24h":
           fromDate.setHours(now.getHours() - 24);
           break;
         case "week":
-          fromDate.setDate(now.getDate() - 8);
+          fromDate.setDate(now.getDate() - 7);
           break;
         case "month":
           fromDate.setMonth(now.getMonth() - 1);
-          fromDate.setDate(fromDate.getDate() - 1);
           break;
         case "year":
           fromDate.setFullYear(now.getFullYear() - 1);
-          fromDate.setDate(fromDate.getDate() - 1);
           break;
         case "custom":
           fromDate.setDate(now.getDate() - Number(customDays));
           break;
       }
-      const checkResponse = await fetch(`https://api.github.com/users/${username}`, {
-        headers: {
-          Accept: "application/vnd.github+json"
-        }
-      });
 
-      if (!checkResponse.ok) throw new Error("Invalid username or organization");
-      
-      const userData = await checkResponse.json();
-      const isOrg = userData.type === "Organization";
-      setIsOrganization(isOrg);
+      // Get repositories based on whether this is a user or organization
+      const repos = isOrg 
+        ? await fetchOrganizationRepos(username, fromDate.toISOString())
+        : await fetchUserRepos(username, fromDate.toISOString());
 
-      const allOrgs = new Set<string>();
-
-      if (!isOrg) {
-        const orgsResponse = await fetch(`https://api.github.com/users/${username}/orgs`, {
-          headers: {
-            Accept: "application/vnd.github+json"
-          }
-        });
-        if (orgsResponse.ok) {
-          const orgsData = await orgsResponse.json();
-          orgsData.forEach((org: any) => {
-            allOrgs.add(JSON.stringify({
-              login: org.login, 
-              avatar_url: org.avatar_url
-            }));
-          });
-        }
+      if (repos.length === 0) {
+        setError(`No repositories with recent activity found for ${isOrg ? 'organization' : 'user'} "${username}"`);
+        return;
       }
 
-      const dateString = `>${fromDate.toISOString().split('T')[0]}`;
-      const query = isOrg 
-        ? `org:${username} committer-date:${dateString} merge:false`
-        : `author:${username} committer-date:${dateString} merge:false`;
-
+      setProgress({ 
+        stage: 'fetching-commits', 
+        reposProcessed: 0, 
+        totalRepos: repos.length,
+        message: 'Starting to process repositories...'
+      });
+      
+      // Then fetch detailed commit information from our server
       const response = await fetch(
-        `https://api.github.com/search/commits?q=${encodeURIComponent(query)}&sort=committer-date&order=desc&page=${pageNum}&per_page=50`,
-        {
-          headers: {
-            Accept: "application/vnd.github.cloak-preview+json",
-            "X-GitHub-Api-Version": "2022-11-28"
-          }
-        }
+        `/api/commits?${new URLSearchParams({
+          username,
+          from: fromDate.toISOString(),
+          repos: JSON.stringify(repos),
+          isOrg: isOrg.toString()
+        })}`
       );
 
-      if (!response.ok) throw new Error("Failed to fetch commits");
-      
-      return await processResponse(response, pageNum, allOrgs);
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to fetch commits');
+      }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+
+      if (!reader) {
+        throw new Error('Failed to read response stream');
+      }
+
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value as Uint8Array, { stream: true });
+        const lines = buffer.split('\n');
+        
+        // Process all complete lines
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i]?.trim();
+          if (line?.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (typeof data === 'string' && data.includes('repositories processed')) {
+              // This is a progress update
+              const matches = data.match(/(\d+) of (\d+)/);
+              if (matches) {
+                const [, processed, total] = matches;
+                setProgress(prev => prev?.stage === 'fetching-commits'
+                  ? { 
+                      ...prev, 
+                      reposProcessed: parseInt(processed ?? "0", 10),
+                      message: data
+                    }
+                  : prev
+                );
+              }
+            } else if (typeof data === 'string') {
+              try {
+                // This should be the final data
+                const commitData = JSON.parse(data);
+                setCommits(commitData);
+              } catch (e) {
+                console.error('Failed to parse commit data:', e);
+              }
+            }
+          }
+        }
+        
+        // Keep the last incomplete line in the buffer
+        buffer = lines[lines.length - 1] ?? "";
+      }
+
+      // Fetch issues and PRs in parallel with commits
+      fetchIssuesAndPRs(fromDate).catch(console.error);
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch commits");
-      if (pageNum === 1) {
-        setCommits([]);
-        setIsOrganization(null);
-        setUserOrgs(new Set());
-      }
+      setCommits({ defaultBranch: [], otherBranches: [] });
+      setIsOrganization(null);
     } finally {
       setLoading(false);
+      setProgress(null);
     }
   }
 
-  async function processResponse(response: Response, pageNum: number, existingOrgs: Set<string>) {
-    const data = await response.json();
-    
-    // Use the passed in Set of existing organizations
-    const newInferredOrgs = new Set(existingOrgs);
-    
-    await Promise.all(data.items.map(async (item: any) => {
-      const repoFullName = item.repository.full_name;
-      const [orgName] = repoFullName.split('/');
-      if (orgName !== username) {
-        try {
-          const checkResponse = await fetch(`https://api.github.com/users/${orgName}`, {
-            headers: {
-              Accept: "application/vnd.github+json"
-            }
-          });
-          if (checkResponse.ok) {
-            const userData = await checkResponse.json();
-            if (userData.type === "Organization") {
-              newInferredOrgs.add(JSON.stringify({
-                login: userData.login,
-                avatar_url: userData.avatar_url
-              }));
-            }
+  async function generateSummary(commits: EnrichedCommit[]) {
+    setSummaryLoading(true);
+    setSummaryError("");
+    setSummary("");
+
+    try {
+      const response = await fetch('/api/summary', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ commits, issuesAndPRs, useAnthropic }),
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error('Failed to generate summary');
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      let buffer = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        
+        for (let i = 0; i < lines.length - 1; i++) {
+          const line = lines[i]?.trim() || '';
+          if (line === '[DONE]') {
+            break;
           }
-        } catch (error) {
-          console.error(`Failed to check organization status for ${orgName}:`, error);
+          setSummary(prev => prev + line + '\n');
         }
+        
+        buffer = lines[lines.length - 1] || '';
       }
-    }));
-
-    // Set organizations only after all processing is complete
-    setUserOrgs(newInferredOrgs);
-    
-    const repoCommits = data.items.reduce((acc: Record<string, any[]>, item: any) => {
-      const repoName = item.repository.full_name;
-      if (!acc[repoName]) {
-        acc[repoName] = [];
-      }
-      acc[repoName].push(item);
-      return acc;
-    }, {});
-
-    const newRepoBranches = { ...repoBranches };
-    await Promise.all(
-      Object.keys(repoCommits).map(async (repoName) => {
-        if (!newRepoBranches[repoName]) {
-          try {
-            const branchResponse = await fetch(
-              `https://api.github.com/repos/${repoName}/branches`,
-              {
-                headers: {
-                  Accept: "application/vnd.github+json",
-                  "X-GitHub-Api-Version": "2022-11-28"
-                }
-              }
-            );
-            if (branchResponse.ok) {
-              const branches = await branchResponse.json();
-              newRepoBranches[repoName] = branches.map((b: any) => ({
-                name: b.name,
-                sha: b.commit.sha
-              }));
-            }
-          } catch (error) {
-            console.error(`Failed to fetch branches for ${repoName}:`, error);
-            newRepoBranches[repoName] = [];
-          }
-        }
-      })
-    );
-    setRepoBranches(newRepoBranches);
-
-    const formattedCommits = data.items.map((item: any) => {
-      const date = new Date(item.commit.author.date);
-      const repoName = item.repository.full_name;
-      
-      let branch = 'main';
-      const repoBranchList = newRepoBranches[repoName] || [];
-      const matchingBranch = repoBranchList.find((b: Branch) => b.sha === item.sha);
-      if (matchingBranch) {
-        branch = matchingBranch.name;
-      }
-
-      return {
-        repo: repoName,
-        message: item.commit.message,
-        date: date.toLocaleDateString(),
-        timestamp: date.getTime(),
-        author: item.author?.login || item.commit.author.name,
-        branch: branch
-      };
-    }).sort((a: { timestamp: number }, b: { timestamp: number }) => b.timestamp - a.timestamp);
-
-    const linkHeader = response.headers.get("link");
-    setHasMore(linkHeader?.includes('rel="next"') ?? false);
-    
-    if (pageNum === 1) {
-      setCommits(formattedCommits);
-    } else {
-      setCommits(prev => [...prev, ...formattedCommits].sort((a, b) => b.timestamp - a.timestamp));
+    } catch (err) {
+      setSummaryError(err instanceof Error ? err.message : 'Failed to generate summary');
+    } finally {
+      setSummaryLoading(false);
     }
-    setPage(pageNum);
   }
-
-  const loadMore = () => {
-    if (!loading && hasMore) {
-      fetchCommits(page + 1);
-    }
-  };
 
   return (
     <main className="flex min-h-screen flex-col items-center bg-black p-8 text-white">
@@ -239,37 +451,20 @@ export default function HomePage() {
           )}
         </h1>
 
-        {!isOrganization && (userOrgs.size > 0) && (
-          <div className="mb-6">
-            <h2 className="mb-3 text-lg font-semibold">Organizations:</h2>
-            <div className="flex flex-wrap gap-4">
-              {Array.from(userOrgs).map((org) => {
-                const parsedOrg = JSON.parse(org);
-                return (
-                  <div key={parsedOrg.login} className="flex items-center gap-2 rounded-lg bg-white/10 p-2">
-                    <img src={parsedOrg.avatar_url} alt={parsedOrg.login} className="h-6 w-6 rounded-full" />
-                    <span>{parsedOrg.login}</span>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
         <div className="mb-8 flex flex-col gap-4 sm:flex-row">
           <input
             type="text"
             value={username}
             onChange={(e) => {
               setUsername(e.target.value);
-              setPage(1);
-              setCommits([]);
+              setCommits({ defaultBranch: [], otherBranches: [] });
               setIsOrganization(null);
-              setUserOrgs(new Set());
+              setProgress(null);
+              setHasSearched(false);
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
-                fetchCommits(1);
+                fetchCommits();
               }
             }}
             placeholder="GitHub username or organization"
@@ -279,9 +474,12 @@ export default function HomePage() {
           <select
             value={timeframe}
             onChange={(e) => {
-              setTimeframe(e.target.value);
-              setPage(1);
-              setCommits([]);
+              const newTimeframe = e.target.value;
+              setTimeframe(newTimeframe);
+              setCommits({ defaultBranch: [], otherBranches: [] });
+              if (hasSearched) {
+                fetchCommits(newTimeframe);
+              }
             }}
             className="rounded-lg bg-white/10 px-4 py-2 text-white"
           >
@@ -298,8 +496,7 @@ export default function HomePage() {
               value={customDays}
               onChange={(e) => {
                 setCustomDays(e.target.value);
-                setPage(1);
-                setCommits([]);
+                setCommits({ defaultBranch: [], otherBranches: [] });
               }}
               min="1"
               placeholder="Number of days"
@@ -308,7 +505,7 @@ export default function HomePage() {
           )}
 
           <button
-            onClick={() => fetchCommits(1)}
+            onClick={() => fetchCommits()}
             disabled={loading}
             className="rounded-lg bg-white/20 px-6 py-2 font-semibold hover:bg-white/30 disabled:opacity-50"
           >
@@ -322,29 +519,253 @@ export default function HomePage() {
           </div>
         )}
 
-        {commits && commits.length > 0 && (
-          <div className="space-y-4">
-            {commits.map((commit, index) => (
-              <div key={index} className="rounded-lg bg-white/10 p-4">
-                <div className="font-semibold">{commit.repo}</div>
-                <div className="text-sm text-white/80">{commit.message}</div>
-                <div className="flex justify-between text-xs text-white/60">
-                  <span>{commit.date}</span>
-                  <span>by {commit.author} on {commit.branch}</span>
-                </div>
+        {progress && (
+          <div className="mb-4 rounded-lg bg-blue-500/20 p-4 text-blue-200">
+            {progress.stage === 'checking-type' && (
+              <p>Checking if {username} is a user or organization...</p>
+            )}
+            {progress.stage === 'finding-repos' && (
+              <p>Found {progress.reposFound} repositories with recent activity...</p>
+            )}
+            {progress.stage === 'fetching-commits' && (
+              <div>
+                <p>{progress.message}</p>
+                {progress.reposProcessed !== undefined && progress.totalRepos && (
+                  <div className="mt-2 h-2 w-full rounded-full bg-blue-900">
+                    <div 
+                      className="h-full rounded-full bg-blue-500 transition-all duration-300"
+                      style={{ 
+                        width: `${(progress.reposProcessed / progress.totalRepos) * 100}%` 
+                      }}
+                    />
+                  </div>
+                )}
               </div>
-            ))}
-            
-            {hasMore && (
-              <button
-                onClick={loadMore}
-                disabled={loading}
-                className="mt-4 w-full rounded-lg bg-white/20 px-6 py-2 font-semibold hover:bg-white/30 disabled:opacity-50"
-              >
-                {loading ? "Loading more..." : "Load More"}
-              </button>
             )}
           </div>
+        )}
+
+        {(allCommits.length > 0 || issuesAndPRs.length > 0) && (
+          <>
+            <div className="mb-6 space-y-4">
+              <div className="rounded-lg bg-white/5 p-4 text-center">
+                <p className="text-lg text-white/90">
+                  <span className="font-bold text-blue-400">{allCommits.length}</span> commits,{' '}
+                  <span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'issue').length}</span> issues, and{' '}
+                  <span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'pr').length}</span> pull requests across{' '}
+                  <span className="font-bold text-blue-400">{uniqueRepos}</span> repositories
+                </p>
+                <div className="mt-4 flex flex-col items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setUseAnthropic(false)}
+                      className={`px-3 py-1 rounded-l-lg ${
+                        !useAnthropic 
+                          ? 'bg-blue-500 text-white' 
+                          : 'bg-white/10 text-white/70 hover:bg-white/20'
+                      }`}
+                    >
+                      OpenAI
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setUseAnthropic(true)}
+                      className={`px-3 py-1 rounded-r-lg ${
+                        useAnthropic 
+                          ? 'bg-blue-500 text-white' 
+                          : 'bg-white/10 text-white/70 hover:bg-white/20'
+                      }`}
+                    >
+                      Claude
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => generateSummary(allCommits)}
+                    disabled={summaryLoading || allCommits.length === 0}
+                    className="rounded-lg bg-blue-500/20 px-6 py-2 font-semibold text-blue-200 hover:bg-blue-500/30 disabled:opacity-50 transition-colors duration-200"
+                  >
+                    {summaryLoading ? (
+                      <span className="flex items-center gap-2">
+                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Generating Summary...
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-2">
+                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        Generate AI Summary
+                      </span>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              {summaryError && (
+                <div className="rounded-lg bg-red-500/20 p-4 text-red-200">
+                  {summaryError}
+                </div>
+              )}
+
+              {summary && (
+                <div className="rounded-lg bg-white/10 p-6">
+                  <div className="prose prose-invert max-w-none
+                    prose-p:text-white/80
+                    prose-ul:text-white/80 prose-ul:list-disc prose-ul:ml-4
+                    prose-li:my-0 prose-li:marker:text-blue-400
+                    prose-headings:text-white prose-headings:font-semibold
+                    prose-h2:text-2xl prose-h2:mb-4
+                    prose-h3:text-xl prose-h3:mb-3
+                    prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
+                    prose-strong:text-white prose-strong:font-semibold
+                    prose-code:text-yellow-200 prose-code:bg-white/5 prose-code:px-1 prose-code:rounded
+                    prose-hr:border-white/10">
+                    <ReactMarkdown>
+                      {summary}
+                    </ReactMarkdown>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              {paginatedItems.map((item) => {
+                if ('committedDate' in item) {
+                  // This is a commit
+                  return (
+                    <div key={`commit-${item.oid}`} className="rounded-lg bg-white/10 p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="inline-block px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-200">
+                          Commit
+                        </span>
+                      </div>
+                      <div className="font-semibold">{item.repository.nameWithOwner}</div>
+                      <div className="text-sm text-white/80">{item.messageHeadline}</div>
+                      <div className="mt-2 text-xs text-white/60">
+                        <span className="text-green-400">+{item.additions}</span>
+                        {" / "}
+                        <span className="text-red-400">-{item.deletions}</span>
+                        {" lines"}
+                      </div>
+                      <div className="flex justify-between text-xs text-white/60">
+                        <span>{new Date(item.committedDate).toLocaleDateString()}</span>
+                        <span>
+                          by {item.author.user?.login || 'Unknown'} on {item.branch}
+                        </span>
+                      </div>
+                      <a 
+                        href={item.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="mt-2 inline-block text-xs text-blue-400 hover:underline"
+                      >
+                        View on GitHub
+                      </a>
+                    </div>
+                  );
+                } else {
+                  // This is an issue or PR
+                  return (
+                    <div key={`issue-${item.id}`} className="rounded-lg bg-white/10 p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`inline-block px-2 py-1 text-xs rounded ${
+                          item.type === 'pr' ? 'bg-purple-500/20 text-purple-200' : 'bg-green-500/20 text-green-200'
+                        }`}>
+                          {item.type === 'pr' ? 'PR' : 'Issue'}
+                        </span>
+                        <span className={`inline-block px-2 py-1 text-xs rounded ${
+                          item.state === 'open' ? 'bg-blue-500/20 text-blue-200' : 'bg-gray-500/20 text-gray-200'
+                        }`}>
+                          {item.state}
+                        </span>
+                      </div>
+                      <div className="font-semibold">{item.repository.nameWithOwner}</div>
+                      <div className="text-sm text-white/80">{item.title}</div>
+                      <div className="mt-2 text-xs text-white/60">
+                        #{item.number} • Updated {new Date(item.updatedAt).toLocaleDateString()}
+                      </div>
+                      <a 
+                        href={item.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="mt-2 inline-block text-xs text-blue-400 hover:underline"
+                      >
+                        View on GitHub
+                      </a>
+                    </div>
+                  );
+                }
+              })}
+            </div>
+
+            {totalPages > 1 && (
+              <div className="mt-8 flex items-center justify-center gap-2">
+                <button
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-50 hover:bg-white/20"
+                >
+                  Previous
+                </button>
+                
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handlePageChange(1)}
+                    className={`h-8 w-8 rounded-lg ${
+                      currentPage === 1
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-white/10 hover:bg-white/20'
+                    }`}
+                  >
+                    1
+                  </button>
+                  {currentPage > 3 && <span className="px-1">...</span>}
+                  {Array.from({ length: Math.min(3, totalPages - 2) }, (_, i) => {
+                    const pageNumber = currentPage <= 3 ? i + 2 : currentPage - 1 + i;
+                    if (pageNumber < totalPages) {
+                      return (
+                        <button
+                          key={pageNumber}
+                          onClick={() => handlePageChange(pageNumber)}
+                          className={`h-8 w-8 rounded-lg ${
+                            currentPage === pageNumber
+                              ? 'bg-blue-500 text-white'
+                              : 'bg-white/10 hover:bg-white/20'
+                          }`}
+                        >
+                          {pageNumber}
+                        </button>
+                      );
+                    }
+                    return null;
+                  })}
+                  {currentPage < totalPages - 2 && <span className="px-1">...</span>}
+                  <button
+                    onClick={() => handlePageChange(totalPages)}
+                    className={`h-8 w-8 rounded-lg ${
+                      currentPage === totalPages
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-white/10 hover:bg-white/20'
+                    }`}
+                  >
+                    {totalPages}
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-50 hover:bg-white/20"
+                >
+                  Next
+                </button>
+              </div>
+            )}
+          </>
         )}
       </div>
     </main>

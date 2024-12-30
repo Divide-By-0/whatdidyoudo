@@ -16,6 +16,7 @@
     "format:check": "prettier --check \"**/*.{ts,tsx,js,jsx,mdx}\" --cache"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.33.1",
     "@t3-oss/env-nextjs": "^0.10.1",
     "geist": "^1.3.0",
     "next": "^15.0.1",

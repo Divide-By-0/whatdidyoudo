@@ -1,4 +1,5 @@
 import { OpenAI } from 'openai';
+import { Anthropic } from '@anthropic-ai/sdk';
 import { EnrichedCommit } from '../../../lib/github';
 import { NextResponse } from 'next/server';
 
@@ -6,15 +7,19 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
 export const runtime = 'edge';
 
 export async function POST(req: Request) {
-  if (!process.env.OPENAI_API_KEY) {
-    return new NextResponse('OpenAI API key not configured', { status: 500 });
+  if (!process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+    return new NextResponse('No API keys configured', { status: 500 });
   }
 
   try {
-    const { commits, issuesAndPRs } = await req.json() as { 
+    const { commits, issuesAndPRs, useAnthropic = false } = await req.json() as { 
       commits: EnrichedCommit[],
       issuesAndPRs: {
         id: number;
@@ -29,10 +34,19 @@ export async function POST(req: Request) {
         };
         type: 'issue' | 'pr';
       }[];
+      useAnthropic?: boolean;
     };
 
     if (!commits || !Array.isArray(commits) || !issuesAndPRs || !Array.isArray(issuesAndPRs)) {
       return new NextResponse('Invalid request body', { status: 400 });
+    }
+
+    if (useAnthropic && !process.env.ANTHROPIC_API_KEY) {
+      return new NextResponse('Anthropic API key not configured', { status: 500 });
+    }
+
+    if (!useAnthropic && !process.env.OPENAI_API_KEY) {
+      return new NextResponse('OpenAI API key not configured', { status: 500 });
     }
 
     // Format commits into a readable format for the AI
@@ -98,44 +112,81 @@ ${commitsText}
 Here are the issues and pull requests:
 ${issuesAndPRsText}`;
 
-    const stream = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        { 
-          role: 'system', 
-          content: 'You are a technical writer who excels at creating clear, concise summaries in markdown format. Focus on the most important changes and use proper markdown syntax.'
-        },
-        { 
-          role: 'user', 
-          content: `${prompt}\n\nHere are the commits to summarize:\n\n${commitsText}` 
-        }
-      ],
-      stream: true,
-      temperature: 0.5,
-      max_tokens: 1000,
-    });
-
     const encoder = new TextEncoder();
-    const customStream = new ReadableStream({
-      async start(controller) {
-        for await (const chunk of stream) {
-          const content = chunk.choices[0]?.delta?.content;
-          if (content !== undefined) {
-            controller.enqueue(encoder.encode(`${content}`));
-          }
-        }
-        controller.enqueue(encoder.encode('[DONE]'));
-        controller.close();
-      },
-    });
 
-    return new NextResponse(customStream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-    });
+    if (useAnthropic) {
+      const stream = await anthropic.messages.create({
+        model: 'claude-3-opus-20240229',
+        max_tokens: 4000,
+        temperature: 0.5,
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        stream: true,
+      });
+
+      const customStream = new ReadableStream({
+        async start(controller) {
+          for await (const chunk of stream) {
+            const content = (chunk as any).delta?.text;
+            if (content) {
+              controller.enqueue(encoder.encode(content));
+            }
+          }
+          controller.enqueue(encoder.encode('[DONE]'));
+          controller.close();
+        },
+      });
+
+      return new NextResponse(customStream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    } else {
+      const stream = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          { 
+            role: 'system', 
+            content: 'You are a technical writer who excels at creating clear, concise summaries in markdown format. Focus on the most important changes and use proper markdown syntax.'
+          },
+          { 
+            role: 'user', 
+            content: prompt
+          }
+        ],
+        stream: true,
+        temperature: 0.5,
+        max_tokens: 1000,
+      });
+
+      const customStream = new ReadableStream({
+        async start(controller) {
+          for await (const chunk of stream) {
+            const content = chunk.choices[0]?.delta?.content;
+            if (content !== null && content !== undefined) {
+              controller.enqueue(encoder.encode(content));
+            }
+          }
+          controller.enqueue(encoder.encode('[DONE]'));
+          controller.close();
+        },
+      });
+
+      return new NextResponse(customStream, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
   } catch (error) {
     console.error('Error generating summary:', error);
     return new NextResponse(

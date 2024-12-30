@@ -1,13 +1,8 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { EnrichedCommit } from "../lib/github";
 import ReactMarkdown from 'react-markdown';
-
-interface Branch {
-  name: string;
-  sha: string;
-}
 
 interface Progress {
   stage: 'checking-type' | 'finding-repos' | 'fetching-commits' | 'fetching-issues';
@@ -48,16 +43,49 @@ export default function HomePage() {
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState("");
   const [issuesAndPRs, setIssuesAndPRs] = useState<IssueOrPR[]>([]);
-  const [issuesLoading, setIssuesLoading] = useState(false);
-  const [issuesError, setIssuesError] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 20;
 
   const allCommits = useMemo(() => {
-    const combined = [...commits.defaultBranch, ...commits.otherBranches];
-    return combined.sort((a, b) => new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime());
+    const commitMap = new Map<string, EnrichedCommit>();
+    
+    [...commits.defaultBranch, ...commits.otherBranches].forEach(commit => {
+      if (!commitMap.has(commit.oid)) {
+        commitMap.set(commit.oid, commit);
+      }
+    });
+    
+    return Array.from(commitMap.values())
+      .sort((a, b) => new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime());
   }, [commits.defaultBranch, commits.otherBranches]);
 
   const uniqueRepos = useMemo(() => new Set(allCommits.map(commit => commit.repository.nameWithOwner)).size, [allCommits]);
   const uniqueBranches = useMemo(() => new Set(allCommits.map(commit => `${commit.repository.nameWithOwner}:${commit.branch}`)).size, [allCommits]);
+
+  const paginatedItems = useMemo(() => {
+    const allItems = [...allCommits, ...issuesAndPRs].sort((a, b) => {
+      const dateA = new Date('committedDate' in a ? a.committedDate : a.updatedAt).getTime();
+      const dateB = new Date('committedDate' in b ? b.committedDate : b.updatedAt).getTime();
+      return dateB - dateA;
+    });
+
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return allItems.slice(startIndex, endIndex);
+  }, [allCommits, issuesAndPRs, currentPage]);
+
+  const totalPages = useMemo(() => {
+    return Math.ceil((allCommits.length + issuesAndPRs.length) / itemsPerPage);
+  }, [allCommits.length, issuesAndPRs.length]);
+
+  const handlePageChange = (newPage: number) => {
+    setCurrentPage(newPage);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [username, timeframe, customDays]);
 
   async function checkIfOrganization(name: string): Promise<boolean> {
     setProgress({ stage: 'checking-type' });
@@ -178,14 +206,15 @@ export default function HomePage() {
   }
 
   async function fetchIssuesAndPRs(fromDate: Date) {
-    setIssuesLoading(true);
-    setIssuesError("");
     setIssuesAndPRs([]);
     setProgress(prev => ({ ...prev, stage: 'fetching-issues', message: 'Fetching issues and pull requests...' }));
 
     try {
-      // Search for issues and PRs created or updated by the user in the timeframe
-      const query = `involves:${username} updated:>=${fromDate.toISOString().split('T')[0]}`;
+      // Build different queries for users vs organizations
+      const query = isOrganization 
+        ? `org:${username} updated:>=${fromDate.toISOString().split('T')[0]}`  // Search in all org repos
+        : `involves:${username} updated:>=${fromDate.toISOString().split('T')[0]}`; // Search for user involvement
+
       const response = await fetch(
         `https://api.github.com/search/issues?${new URLSearchParams({
           q: query,
@@ -217,10 +246,7 @@ export default function HomePage() {
       }));
 
       setIssuesAndPRs(transformedData);
-    } catch (err) {
-      setIssuesError(err instanceof Error ? err.message : "Failed to fetch issues and pull requests");
     } finally {
-      setIssuesLoading(false);
       setProgress(prev => prev?.stage === 'fetching-issues' ? null : prev);
     }
   }
@@ -565,7 +591,7 @@ export default function HomePage() {
           </div>
         )}
 
-        {allCommits.length > 0 && (
+        {(allCommits.length > 0 || issuesAndPRs.length > 0) && (
           <>
             <div className="mb-6 rounded-lg bg-white/5 p-4 text-center">
               <p className="text-lg text-white/90">
@@ -576,81 +602,140 @@ export default function HomePage() {
                 <span className="font-bold text-blue-400">{uniqueBranches}</span> branches
               </p>
             </div>
+
             <div className="space-y-4">
-              {[...allCommits, ...issuesAndPRs]
-                .sort((a, b) => {
-                  const dateA = new Date('committedDate' in a ? a.committedDate : a.updatedAt).getTime();
-                  const dateB = new Date('committedDate' in b ? b.committedDate : b.updatedAt).getTime();
-                  return dateB - dateA;
-                })
-                .map((item) => {
-                  if ('committedDate' in item) {
-                    // This is a commit
-                    return (
-                      <div key={`commit-${item.oid}`} className="rounded-lg bg-white/10 p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="inline-block px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-200">
-                            Commit
-                          </span>
-                        </div>
-                        <div className="font-semibold">{item.repository.nameWithOwner}</div>
-                        <div className="text-sm text-white/80">{item.messageHeadline}</div>
-                        <div className="mt-2 text-xs text-white/60">
-                          <span className="text-green-400">+{item.additions}</span>
-                          {" / "}
-                          <span className="text-red-400">-{item.deletions}</span>
-                          {" lines"}
-                        </div>
-                        <div className="flex justify-between text-xs text-white/60">
-                          <span>{new Date(item.committedDate).toLocaleDateString()}</span>
-                          <span>
-                            by {item.author.user?.login || 'Unknown'} on {item.branch}
-                          </span>
-                        </div>
-                        <a 
-                          href={item.url} 
-                          target="_blank" 
-                          rel="noopener noreferrer" 
-                          className="mt-2 inline-block text-xs text-blue-400 hover:underline"
-                        >
-                          View on GitHub
-                        </a>
+              {paginatedItems.map((item) => {
+                if ('committedDate' in item) {
+                  // This is a commit
+                  return (
+                    <div key={`commit-${item.oid}`} className="rounded-lg bg-white/10 p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="inline-block px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-200">
+                          Commit
+                        </span>
                       </div>
-                    );
-                  } else {
-                    // This is an issue or PR
-                    return (
-                      <div key={`issue-${item.id}`} className="rounded-lg bg-white/10 p-4">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className={`inline-block px-2 py-1 text-xs rounded ${
-                            item.type === 'pr' ? 'bg-purple-500/20 text-purple-200' : 'bg-green-500/20 text-green-200'
-                          }`}>
-                            {item.type === 'pr' ? 'PR' : 'Issue'}
-                          </span>
-                          <span className={`inline-block px-2 py-1 text-xs rounded ${
-                            item.state === 'open' ? 'bg-blue-500/20 text-blue-200' : 'bg-gray-500/20 text-gray-200'
-                          }`}>
-                            {item.state}
-                          </span>
-                        </div>
-                        <div className="font-semibold">{item.repository.nameWithOwner}</div>
-                        <div className="text-sm text-white/80">{item.title}</div>
-                        <div className="mt-2 text-xs text-white/60">
-                          #{item.number} • Updated {new Date(item.updatedAt).toLocaleDateString()}
-                        </div>
-                        <a 
-                          href={item.url} 
-                          target="_blank" 
-                          rel="noopener noreferrer" 
-                          className="mt-2 inline-block text-xs text-blue-400 hover:underline"
-                        >
-                          View on GitHub
-                        </a>
+                      <div className="font-semibold">{item.repository.nameWithOwner}</div>
+                      <div className="text-sm text-white/80">{item.messageHeadline}</div>
+                      <div className="mt-2 text-xs text-white/60">
+                        <span className="text-green-400">+{item.additions}</span>
+                        {" / "}
+                        <span className="text-red-400">-{item.deletions}</span>
+                        {" lines"}
                       </div>
-                    );
-                  }
-                })}
+                      <div className="flex justify-between text-xs text-white/60">
+                        <span>{new Date(item.committedDate).toLocaleDateString()}</span>
+                        <span>
+                          by {item.author.user?.login || 'Unknown'} on {item.branch}
+                        </span>
+                      </div>
+                      <a 
+                        href={item.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="mt-2 inline-block text-xs text-blue-400 hover:underline"
+                      >
+                        View on GitHub
+                      </a>
+                    </div>
+                  );
+                } else {
+                  // This is an issue or PR
+                  return (
+                    <div key={`issue-${item.id}`} className="rounded-lg bg-white/10 p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className={`inline-block px-2 py-1 text-xs rounded ${
+                          item.type === 'pr' ? 'bg-purple-500/20 text-purple-200' : 'bg-green-500/20 text-green-200'
+                        }`}>
+                          {item.type === 'pr' ? 'PR' : 'Issue'}
+                        </span>
+                        <span className={`inline-block px-2 py-1 text-xs rounded ${
+                          item.state === 'open' ? 'bg-blue-500/20 text-blue-200' : 'bg-gray-500/20 text-gray-200'
+                        }`}>
+                          {item.state}
+                        </span>
+                      </div>
+                      <div className="font-semibold">{item.repository.nameWithOwner}</div>
+                      <div className="text-sm text-white/80">{item.title}</div>
+                      <div className="mt-2 text-xs text-white/60">
+                        #{item.number} • Updated {new Date(item.updatedAt).toLocaleDateString()}
+                      </div>
+                      <a 
+                        href={item.url} 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="mt-2 inline-block text-xs text-blue-400 hover:underline"
+                      >
+                        View on GitHub
+                      </a>
+                    </div>
+                  );
+                }
+              })}
             </div>
+
+            {totalPages > 1 && (
+              <div className="mt-8 flex items-center justify-center gap-2">
+                <button
+                  onClick={() => handlePageChange(currentPage - 1)}
+                  disabled={currentPage === 1}
+                  className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-50 hover:bg-white/20"
+                >
+                  Previous
+                </button>
+                
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => handlePageChange(1)}
+                    className={`h-8 w-8 rounded-lg ${
+                      currentPage === 1
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-white/10 hover:bg-white/20'
+                    }`}
+                  >
+                    1
+                  </button>
+                  {currentPage > 3 && <span className="px-1">...</span>}
+                  {Array.from({ length: Math.min(3, totalPages - 2) }, (_, i) => {
+                    const pageNumber = currentPage <= 3 ? i + 2 : currentPage - 1 + i;
+                    if (pageNumber < totalPages) {
+                      return (
+                        <button
+                          key={pageNumber}
+                          onClick={() => handlePageChange(pageNumber)}
+                          className={`h-8 w-8 rounded-lg ${
+                            currentPage === pageNumber
+                              ? 'bg-blue-500 text-white'
+                              : 'bg-white/10 hover:bg-white/20'
+                          }`}
+                        >
+                          {pageNumber}
+                        </button>
+                      );
+                    }
+                    return null;
+                  })}
+                  {currentPage < totalPages - 2 && <span className="px-1">...</span>}
+                  <button
+                    onClick={() => handlePageChange(totalPages)}
+                    className={`h-8 w-8 rounded-lg ${
+                      currentPage === totalPages
+                        ? 'bg-blue-500 text-white'
+                        : 'bg-white/10 hover:bg-white/20'
+                    }`}
+                  >
+                    {totalPages}
+                  </button>
+                </div>
+
+                <button
+                  onClick={() => handlePageChange(currentPage + 1)}
+                  disabled={currentPage === totalPages}
+                  className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-50 hover:bg-white/20"
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>

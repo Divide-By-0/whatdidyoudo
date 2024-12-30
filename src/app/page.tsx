@@ -10,11 +10,25 @@ interface Branch {
 }
 
 interface Progress {
-  stage: 'checking-type' | 'finding-repos' | 'fetching-commits';
+  stage: 'checking-type' | 'finding-repos' | 'fetching-commits' | 'fetching-issues';
   reposFound?: number;
   reposProcessed?: number;
   totalRepos?: number;
   message?: string;
+}
+
+interface IssueOrPR {
+  id: number;
+  title: string;
+  number: number;
+  state: string;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+  repository: {
+    nameWithOwner: string;
+  };
+  type: 'issue' | 'pr';
 }
 
 export default function HomePage() {
@@ -33,6 +47,9 @@ export default function HomePage() {
   const [summary, setSummary] = useState("");
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState("");
+  const [issuesAndPRs, setIssuesAndPRs] = useState<IssueOrPR[]>([]);
+  const [issuesLoading, setIssuesLoading] = useState(false);
+  const [issuesError, setIssuesError] = useState("");
 
   const allCommits = useMemo(() => {
     const combined = [...commits.defaultBranch, ...commits.otherBranches];
@@ -160,6 +177,54 @@ export default function HomePage() {
     return Array.from(repoSet);
   }
 
+  async function fetchIssuesAndPRs(fromDate: Date) {
+    setIssuesLoading(true);
+    setIssuesError("");
+    setIssuesAndPRs([]);
+    setProgress(prev => ({ ...prev, stage: 'fetching-issues', message: 'Fetching issues and pull requests...' }));
+
+    try {
+      // Search for issues and PRs created or updated by the user in the timeframe
+      const query = `involves:${username} updated:>=${fromDate.toISOString().split('T')[0]}`;
+      const response = await fetch(
+        `https://api.github.com/search/issues?${new URLSearchParams({
+          q: query,
+          sort: 'updated',
+          order: 'desc',
+          per_page: '100'
+        })}`
+      );
+
+      if (!response.ok) {
+        throw new Error(`GitHub API error: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      
+      // Transform the data into our format
+      const transformedData: IssueOrPR[] = data.items.map((item: any) => ({
+        id: item.id,
+        title: item.title,
+        number: item.number,
+        state: item.state,
+        createdAt: item.created_at,
+        updatedAt: item.updated_at,
+        url: item.html_url,
+        repository: {
+          nameWithOwner: item.repository_url.replace('https://api.github.com/repos/', '')
+        },
+        type: item.pull_request ? 'pr' : 'issue'
+      }));
+
+      setIssuesAndPRs(transformedData);
+    } catch (err) {
+      setIssuesError(err instanceof Error ? err.message : "Failed to fetch issues and pull requests");
+    } finally {
+      setIssuesLoading(false);
+      setProgress(prev => prev?.stage === 'fetching-issues' ? null : prev);
+    }
+  }
+
   async function fetchCommits(overrideTimeframe?: string) {
     if (!username) {
       setError("Please enter a GitHub username or organization");
@@ -206,7 +271,6 @@ export default function HomePage() {
           fromDate.setDate(now.getDate() - Number(customDays));
           break;
       }
-      console.log(effectiveTimeframe, fromDate);
 
       // Get repositories based on whether this is a user or organization
       const repos = isOrg 
@@ -290,6 +354,9 @@ export default function HomePage() {
         buffer = lines[lines.length - 1] ?? "";
       }
 
+      // Fetch issues and PRs in parallel with commits
+      fetchIssuesAndPRs(fromDate).catch(console.error);
+
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch commits");
       setCommits({ defaultBranch: [], otherBranches: [] });
@@ -311,7 +378,7 @@ export default function HomePage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ commits }),
+        body: JSON.stringify({ commits, issuesAndPRs }),
       });
 
       if (!response.ok || !response.body) {
@@ -487,9 +554,9 @@ export default function HomePage() {
           )}
         </div>
 
-        {hasSearched && !loading && !error && allCommits.length === 0 && username && (
+        {hasSearched && !loading && !error && allCommits.length === 0 && issuesAndPRs.length === 0 && username && (
           <div className="mb-4 rounded-lg bg-yellow-500/20 p-4 text-yellow-200">
-            No commits found in the selected time period. Try:
+            No activity found in the selected time period. Try:
             <ul className="mt-2 list-disc pl-6">
               <li>Extending the time range</li>
               <li>Checking the username spelling</li>
@@ -502,38 +569,87 @@ export default function HomePage() {
           <>
             <div className="mb-6 rounded-lg bg-white/5 p-4 text-center">
               <p className="text-lg text-white/90">
-                <span className="font-bold text-blue-400">{allCommits.length}</span> commits across{' '}
+                <span className="font-bold text-blue-400">{allCommits.length}</span> commits,{' '}
+                <span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'issue').length}</span> issues, and{' '}
+                <span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'pr').length}</span> pull requests across{' '}
                 <span className="font-bold text-blue-400">{uniqueRepos}</span> repositories on{' '}
                 <span className="font-bold text-blue-400">{uniqueBranches}</span> branches
               </p>
             </div>
             <div className="space-y-4">
-              {allCommits.map((commit, index) => (
-                <div key={`${commit.oid}-${index}`} className="rounded-lg bg-white/10 p-4">
-                  <div className="font-semibold">{commit.repository.nameWithOwner}</div>
-                  <div className="text-sm text-white/80">{commit.messageHeadline}</div>
-                  <div className="mt-2 text-xs text-white/60">
-                    <span className="text-green-400">+{commit.additions}</span>
-                    {" / "}
-                    <span className="text-red-400">-{commit.deletions}</span>
-                    {" lines"}
-                  </div>
-                  <div className="flex justify-between text-xs text-white/60">
-                    <span>{new Date(commit.committedDate).toLocaleDateString()}</span>
-                    <span>
-                      by {commit.author.user?.login || 'Unknown'} on {commit.branch}
-                    </span>
-                  </div>
-                  <a 
-                    href={commit.url} 
-                    target="_blank" 
-                    rel="noopener noreferrer" 
-                    className="mt-2 inline-block text-xs text-blue-400 hover:underline"
-                  >
-                    View on GitHub
-                  </a>
-                </div>
-              ))}
+              {[...allCommits, ...issuesAndPRs]
+                .sort((a, b) => {
+                  const dateA = new Date('committedDate' in a ? a.committedDate : a.updatedAt).getTime();
+                  const dateB = new Date('committedDate' in b ? b.committedDate : b.updatedAt).getTime();
+                  return dateB - dateA;
+                })
+                .map((item) => {
+                  if ('committedDate' in item) {
+                    // This is a commit
+                    return (
+                      <div key={`commit-${item.oid}`} className="rounded-lg bg-white/10 p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="inline-block px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-200">
+                            Commit
+                          </span>
+                        </div>
+                        <div className="font-semibold">{item.repository.nameWithOwner}</div>
+                        <div className="text-sm text-white/80">{item.messageHeadline}</div>
+                        <div className="mt-2 text-xs text-white/60">
+                          <span className="text-green-400">+{item.additions}</span>
+                          {" / "}
+                          <span className="text-red-400">-{item.deletions}</span>
+                          {" lines"}
+                        </div>
+                        <div className="flex justify-between text-xs text-white/60">
+                          <span>{new Date(item.committedDate).toLocaleDateString()}</span>
+                          <span>
+                            by {item.author.user?.login || 'Unknown'} on {item.branch}
+                          </span>
+                        </div>
+                        <a 
+                          href={item.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="mt-2 inline-block text-xs text-blue-400 hover:underline"
+                        >
+                          View on GitHub
+                        </a>
+                      </div>
+                    );
+                  } else {
+                    // This is an issue or PR
+                    return (
+                      <div key={`issue-${item.id}`} className="rounded-lg bg-white/10 p-4">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className={`inline-block px-2 py-1 text-xs rounded ${
+                            item.type === 'pr' ? 'bg-purple-500/20 text-purple-200' : 'bg-green-500/20 text-green-200'
+                          }`}>
+                            {item.type === 'pr' ? 'PR' : 'Issue'}
+                          </span>
+                          <span className={`inline-block px-2 py-1 text-xs rounded ${
+                            item.state === 'open' ? 'bg-blue-500/20 text-blue-200' : 'bg-gray-500/20 text-gray-200'
+                          }`}>
+                            {item.state}
+                          </span>
+                        </div>
+                        <div className="font-semibold">{item.repository.nameWithOwner}</div>
+                        <div className="text-sm text-white/80">{item.title}</div>
+                        <div className="mt-2 text-xs text-white/60">
+                          #{item.number} • Updated {new Date(item.updatedAt).toLocaleDateString()}
+                        </div>
+                        <a 
+                          href={item.url} 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="mt-2 inline-block text-xs text-blue-400 hover:underline"
+                        >
+                          View on GitHub
+                        </a>
+                      </div>
+                    );
+                  }
+                })}
             </div>
           </>
         )}

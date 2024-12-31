@@ -376,6 +376,8 @@ export default function HomePage() {
       }
 
       let buffer = '';
+      let latestCommitData: { defaultBranch: EnrichedCommit[]; otherBranches: EnrichedCommit[] } | null = null;
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -404,6 +406,7 @@ export default function HomePage() {
               try {
                 const commitData = JSON.parse(data);
                 setCommits(commitData);
+                latestCommitData = commitData;
               } catch (e) {
                 console.error('Failed to parse commit data:', e);
               }
@@ -413,7 +416,22 @@ export default function HomePage() {
         
         buffer = lines[lines.length - 1] ?? "";
       }
-      fetchIssuesAndPRs(fromDate).catch(console.error);
+
+      const allLatestCommits = [...(latestCommitData?.defaultBranch || []), ...(latestCommitData?.otherBranches || [])];
+      
+      setProgress({ 
+        stage: 'fetching-issues',
+        message: 'Fetching issues and pull requests...'
+      });
+
+      await fetchIssuesAndPRs(fromDate)
+        .then(() => {
+          if (allLatestCommits.length > 0 || issuesAndPRs.length > 0) {
+            setProgress(null);
+            return generateSummary(allLatestCommits);
+          }
+        })
+        .catch(console.error);
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch commits");
@@ -436,7 +454,7 @@ export default function HomePage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ commits, issuesAndPRs }),
+        body: JSON.stringify({ commits, issuesAndPRs, username }),
       });
 
       if (!response.ok || !response.body) {
@@ -468,6 +486,7 @@ export default function HomePage() {
       setSummaryError(err instanceof Error ? err.message : 'Failed to generate summary');
     } finally {
       setSummaryLoading(false);
+      setProgress(null);
     }
   }
 
@@ -493,6 +512,7 @@ export default function HomePage() {
               setIsOrganization(null);
               setProgress(null);
               setHasSearched(false);
+              setSummary("");
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
@@ -510,6 +530,7 @@ export default function HomePage() {
               setTimeframe(newTimeframe);
               setCommits({ defaultBranch: [], otherBranches: [] });
               setIssuesAndPRs([]);
+              setSummary("");
               if (hasSearched) {
                 fetchCommits(newTimeframe);
               }
@@ -530,6 +551,7 @@ export default function HomePage() {
               onChange={(e) => {
                 setCustomDays(e.target.value);
                 setCommits({ defaultBranch: [], otherBranches: [] });
+                setSummary("");
               }}
               min="1"
               placeholder="Number of days"
@@ -575,6 +597,9 @@ export default function HomePage() {
                 )}
               </div>
             )}
+            {progress.stage === 'fetching-issues' && (
+              <p>{progress.message}</p>
+            )}
           </div>
         )}
 
@@ -599,30 +624,17 @@ export default function HomePage() {
                   <span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'pr').length}</span> pull requests across{' '}
                   <span className="font-bold text-blue-400">{uniqueRepos}</span> repositories
                 </p>
-                <div className="mt-4 flex flex-col items-center gap-3">
-                  <button
-                    onClick={() => generateSummary(allCommits)}
-                    disabled={summaryLoading || allCommits.length === 0}
-                    className="rounded-lg bg-blue-500/20 px-6 py-2 font-semibold text-blue-200 hover:bg-blue-500/30 disabled:opacity-50 transition-colors duration-200"
-                  >
-                    {summaryLoading ? (
-                      <span className="flex items-center gap-2">
-                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                        </svg>
-                        Generating Summary...
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-2">
-                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
-                        </svg>
-                        Generate AI Summary
-                      </span>
-                    )}
-                  </button>
-                </div>
+                {summaryLoading && (
+                  <div className="mt-4 text-blue-200">
+                    <span className="flex items-center justify-center gap-2">
+                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                      </svg>
+                      Generating Activity Summary...
+                    </span>
+                  </div>
+                )}
               </div>
 
               {summaryError && (
@@ -635,14 +647,25 @@ export default function HomePage() {
                 <div className="rounded-lg bg-white/10 p-6">
                   <div className="prose prose-invert max-w-none
                     prose-p:text-white/80
-                    prose-ul:text-white/80 prose-ul:list-disc prose-ul:ml-4
-                    prose-li:my-0 prose-li:marker:text-blue-400
+                    prose-ul:text-white/80 
+                    prose-ul:list-disc 
+                    prose-ul:ml-4
+                    prose-ul:my-1
+                    prose-ul:prose-ul:ml-4
+                    prose-ul:prose-ul:my-0
+                    prose-li:my-0.5
+                    prose-li:marker:text-blue-400
                     prose-headings:text-white prose-headings:font-semibold
                     prose-h2:text-2xl prose-h2:mb-4
                     prose-h3:text-xl prose-h3:mb-3
                     prose-a:text-blue-400 prose-a:no-underline hover:prose-a:underline
                     prose-strong:text-white prose-strong:font-semibold
-                    prose-code:text-yellow-200 prose-code:bg-white/5 prose-code:px-1 prose-code:rounded
+                    prose-code:text-yellow-200 
+                    prose-code:bg-transparent 
+                    prose-code:px-1 
+                    prose-code:rounded
+                    prose-code:before:content-none
+                    prose-code:after:content-none
                     prose-hr:border-white/10">
                     <ReactMarkdown>
                       {summary}

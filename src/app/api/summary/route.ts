@@ -14,7 +14,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { commits, issuesAndPRs } = await req.json() as { 
+    const { commits, issuesAndPRs, username } = await req.json() as { 
       commits: EnrichedCommit[],
       issuesAndPRs: {
         id: number;
@@ -29,9 +29,10 @@ export async function POST(req: Request) {
         };
         type: 'issue' | 'pr';
       }[];
+      username: string;
     };
 
-    if (!commits || !Array.isArray(commits) || !issuesAndPRs || !Array.isArray(issuesAndPRs)) {
+    if (!commits || !Array.isArray(commits) || !issuesAndPRs || !Array.isArray(issuesAndPRs) || !username) {
       return new NextResponse('Invalid request body', { status: 400 });
     }
 
@@ -51,7 +52,7 @@ Number: #${item.number}
 Updated: ${new Date(item.updatedAt).toLocaleDateString()}`;
     }).join('\n---\n');
 
-    const prompt = `Please analyze the following GitHub activity and provide a clear, concise summary in markdown format. Focus on the most significant changes and patterns.
+    const prompt = `Please analyze the following GitHub activity for ${username} and provide a SHORT and CONCISE summary of the contributions made by them in markdown format.
 
 COMMITS:
 ${commitsText}
@@ -59,13 +60,12 @@ ${commitsText}
 ISSUES AND PULL REQUESTS:
 ${issuesAndPRsText}
 
-Please structure your response in markdown with:
-1. A brief overview of total activity
-2. Key highlights and patterns
-3. Most significant changes or contributions
-4. Notable repositories worked on
+Some guidelines:
+1. Include a brief overview of total activity. Talk about features and fixes, not number of commits or contributions made.
+2. Mention significant changes or contributions made. Identify the main features/fixes, you don't have to talk about every individual commit.
+3. Do NOT use nested bullet points. Do NOT talk about number of commits or lines changed.
 
-Keep the summary professional and focused on technical details. Use bullet points and sections to organize the information.`;
+Focus on technical details. Use bullet points and hyperlinks to organize information.`;
 
     const encoder = new TextEncoder();
 

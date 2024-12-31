@@ -44,7 +44,11 @@ export default function HomePage() {
   const [summaryError, setSummaryError] = useState("");
   const [issuesAndPRs, setIssuesAndPRs] = useState<IssueOrPR[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
+  const [selectedTypes, setSelectedTypes] = useState<('commit' | 'issue' | 'pr')[]>(['commit', 'issue', 'pr']);
+  const [selectedRepo, setSelectedRepo] = useState<string>('all');
   const itemsPerPage = 20;
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportError, setExportError] = useState("");
 
   const allCommits = useMemo(() => {
     const commitMap = new Map<string, EnrichedCommit>();
@@ -68,8 +72,23 @@ export default function HomePage() {
   }, [allCommits, issuesAndPRs]);
   const uniqueBranches = useMemo(() => new Set(allCommits.map(commit => `${commit.repository.nameWithOwner}:${commit.branch}`)).size, [allCommits]);
 
+  const repositories = useMemo(() => {
+    const repoSet = new Set([
+      ...allCommits.map(commit => commit.repository.nameWithOwner),
+      ...issuesAndPRs.map(item => item.repository.nameWithOwner)
+    ]);
+    
+    return ['all', ...Array.from(repoSet)].sort();
+  }, [allCommits, issuesAndPRs]);
+
   const paginatedItems = useMemo(() => {
-    const allItems = [...allCommits, ...issuesAndPRs].sort((a, b) => {
+    const allItems = [
+      ...(selectedTypes.includes('commit') ? allCommits : []),
+      ...(selectedTypes.includes('issue') ? issuesAndPRs.filter(item => item.type === 'issue') : []),
+      ...(selectedTypes.includes('pr') ? issuesAndPRs.filter(item => item.type === 'pr') : [])
+    ]
+    .filter(item => selectedRepo === 'all' || item.repository.nameWithOwner === selectedRepo)
+    .sort((a, b) => {
       const dateA = new Date('committedDate' in a ? a.committedDate : a.updatedAt).getTime();
       const dateB = new Date('committedDate' in b ? b.committedDate : b.updatedAt).getTime();
       return dateB - dateA;
@@ -78,11 +97,19 @@ export default function HomePage() {
     const startIndex = (currentPage - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
     return allItems.slice(startIndex, endIndex);
-  }, [allCommits, issuesAndPRs, currentPage]);
+  }, [allCommits, issuesAndPRs, currentPage, selectedTypes, selectedRepo]);
 
   const totalPages = useMemo(() => {
-    return Math.ceil((allCommits.length + issuesAndPRs.length) / itemsPerPage);
-  }, [allCommits.length, issuesAndPRs.length]);
+    const filteredCount = [
+      ...(selectedTypes.includes('commit') ? allCommits : []),
+      ...(selectedTypes.includes('issue') ? issuesAndPRs.filter(item => item.type === 'issue') : []),
+      ...(selectedTypes.includes('pr') ? issuesAndPRs.filter(item => item.type === 'pr') : [])
+    ]
+    .filter(item => selectedRepo === 'all' || item.repository.nameWithOwner === selectedRepo)
+      .length;
+    
+    return Math.ceil(filteredCount / itemsPerPage);
+  }, [allCommits, issuesAndPRs, selectedTypes, selectedRepo]);
 
   const handlePageChange = (newPage: number) => {
     setCurrentPage(newPage);
@@ -211,12 +238,12 @@ export default function HomePage() {
     return Array.from(repoSet);
   }
 
-  async function fetchIssuesAndPRs(fromDate: Date) {
+  async function fetchIssuesAndPRs(fromDate: Date, isOrg: boolean) {
     setIssuesAndPRs([]);
     setProgress(prev => ({ ...prev, stage: 'fetching-issues', message: 'Fetching issues and pull requests...' }));
 
     try {
-      if (isOrganization) {
+      if (isOrg) {
         const query = `org:${username} updated:>=${fromDate.toISOString().split('T')[0]}`;
         const response = await fetch(
           `https://api.github.com/search/issues?${new URLSearchParams({
@@ -232,7 +259,7 @@ export default function HomePage() {
         }
 
         const data = await response.json();
-        setIssuesAndPRs(transformIssuesData(data.items));
+        setIssuesAndPRs(transformIssuesData(data.items || []));
         return;
       }
       const response = await fetch(
@@ -424,7 +451,7 @@ export default function HomePage() {
         message: 'Fetching issues and pull requests...'
       });
 
-      await fetchIssuesAndPRs(fromDate)
+      await fetchIssuesAndPRs(fromDate, isOrg)
         .then(() => {
           if (allLatestCommits.length > 0 || issuesAndPRs.length > 0) {
             setProgress(null);
@@ -489,6 +516,89 @@ export default function HomePage() {
       setProgress(null);
     }
   }
+
+  async function handleExport() {
+    if (!username || (!allCommits.length && !issuesAndPRs.length)) {
+      return;
+    }
+
+    setExportLoading(true);
+    setExportError("");
+
+    try {
+      const now = new Date();
+      const fromDate = new Date();
+
+      switch (timeframe) {
+        case "24h":
+          fromDate.setHours(now.getHours() - 24);
+          break;
+        case "week":
+          fromDate.setDate(now.getDate() - 7);
+          break;
+        case "month":
+          fromDate.setMonth(now.getMonth() - 1);
+          break;
+        case "year":
+          fromDate.setFullYear(now.getFullYear() - 1);
+          break;
+        case "custom":
+          fromDate.setDate(now.getDate() - Number(customDays));
+          break;
+      }
+
+      const formatDate = (date: Date) => {
+        return date.toISOString().split('T')[0];
+      };
+
+      const id = `${username}-${formatDate(fromDate)}-to-${formatDate(now)}`;
+      
+      const response = await fetch('/api/activity', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id,
+          username,
+          startTime: fromDate.toISOString(),
+          endTime: now.toISOString(),
+          summary,
+          commits: allCommits,
+          issues: issuesAndPRs.filter(item => item.type === 'issue'),
+          pullRequests: issuesAndPRs.filter(item => item.type === 'pr'),
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to export activity');
+      }
+
+      const data = await response.json();
+      window.location.href = `/share/${data.id}`;
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : 'Failed to export activity');
+    } finally {
+      setExportLoading(false);
+    }
+  }
+
+  const handleTypeToggle = (type: 'commit' | 'issue' | 'pr') => {
+    setSelectedTypes(prev => {
+      if (prev.includes(type)) {
+        // Don't allow deselecting if it's the last type selected
+        if (prev.length === 1) return prev;
+        return prev.filter(t => t !== type);
+      }
+      return [...prev, type];
+    });
+    setCurrentPage(1);
+  };
+
+  const handleRepoChange = (repo: string) => {
+    setSelectedRepo(repo);
+    setCurrentPage(1);
+  };
 
   return (
     <main className="flex min-h-screen flex-col items-center bg-black p-8 text-white">
@@ -624,15 +734,46 @@ export default function HomePage() {
                   <span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'pr').length}</span> pull requests across{' '}
                   <span className="font-bold text-blue-400">{uniqueRepos}</span> repositories
                 </p>
-                {summaryLoading && (
-                  <div className="mt-4 text-blue-200">
-                    <span className="flex items-center justify-center gap-2">
-                      <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                      </svg>
-                      Generating Activity Summary...
-                    </span>
+                <div className="mt-4 flex justify-center gap-4">
+                  {summaryLoading && (
+                    <div className="text-blue-200">
+                      <span className="flex items-center justify-center gap-2">
+                        <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                        </svg>
+                        Generating Activity Summary...
+                      </span>
+                    </div>
+                  )}
+                  {!summaryLoading && (
+                    <button
+                      onClick={handleExport}
+                      disabled={exportLoading}
+                      className="rounded-lg bg-blue-500/20 px-4 py-2 text-sm font-semibold text-blue-200 hover:bg-blue-500/30 disabled:opacity-50 flex items-center gap-2"
+                    >
+                      {exportLoading ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                          Share...
+                        </>
+                      ) : (
+                        <>
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                          </svg>
+                          Share
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+                {exportError && (
+                  <div className="mt-2 text-red-400 text-sm">
+                    {exportError}
                   </div>
                 )}
               </div>
@@ -676,138 +817,193 @@ export default function HomePage() {
             </div>
 
             <div className="space-y-4">
-              {paginatedItems.map((item) => {
-                if ('committedDate' in item) {
-                  // This is a commit
-                  return (
-                    <div key={`commit-${item.oid}`} className="rounded-lg bg-white/10 p-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="inline-block px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-200">
-                          Commit
-                        </span>
-                      </div>
-                      <div className="font-semibold">{item.repository.nameWithOwner}</div>
-                      <div className="text-sm text-white/80">{item.messageHeadline}</div>
-                      <div className="mt-2 text-xs text-white/60">
-                        <span className="text-green-400">+{item.additions}</span>
-                        {" / "}
-                        <span className="text-red-400">-{item.deletions}</span>
-                        {" lines"}
-                      </div>
-                      <div className="flex justify-between text-xs text-white/60">
-                        <span>{new Date(item.committedDate).toLocaleDateString()}</span>
-                        <span>
-                          by {item.author.user?.login || 'Unknown'} on {item.branch}
-                        </span>
-                      </div>
-                      <a 
-                        href={item.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer" 
-                        className="mt-2 inline-block text-xs text-blue-400 hover:underline"
-                      >
-                        View on GitHub
-                      </a>
-                    </div>
-                  );
-                } else {
-                  // This is an issue or PR
-                  return (
-                    <div key={`issue-${item.id}`} className="rounded-lg bg-white/10 p-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className={`inline-block px-2 py-1 text-xs rounded ${
-                          item.type === 'pr' ? 'bg-purple-500/20 text-purple-200' : 'bg-green-500/20 text-green-200'
-                        }`}>
-                          {item.type === 'pr' ? 'PR' : 'Issue'}
-                        </span>
-                        <span className={`inline-block px-2 py-1 text-xs rounded ${
-                          item.state === 'open' ? 'bg-blue-500/20 text-blue-200' : 'bg-gray-500/20 text-gray-200'
-                        }`}>
-                          {item.state}
-                        </span>
-                      </div>
-                      <div className="font-semibold">{item.repository.nameWithOwner}</div>
-                      <div className="text-sm text-white/80">{item.title}</div>
-                      <div className="mt-2 text-xs text-white/60">
-                        #{item.number} • Updated {new Date(item.updatedAt).toLocaleDateString()}
-                      </div>
-                      <a 
-                        href={item.url} 
-                        target="_blank" 
-                        rel="noopener noreferrer" 
-                        className="mt-2 inline-block text-xs text-blue-400 hover:underline"
-                      >
-                        View on GitHub
-                      </a>
-                    </div>
-                  );
-                }
-              })}
-            </div>
-
-            {totalPages > 1 && (
-              <div className="mt-8 flex items-center justify-center gap-2">
-                <button
-                  onClick={() => handlePageChange(currentPage - 1)}
-                  disabled={currentPage === 1}
-                  className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-50 hover:bg-white/20"
-                >
-                  Previous
-                </button>
-                
-                <div className="flex items-center gap-2">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-wrap gap-2">
                   <button
-                    onClick={() => handlePageChange(1)}
-                    className={`h-8 w-8 rounded-lg ${
-                      currentPage === 1
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-white/10 hover:bg-white/20'
+                    onClick={() => handleTypeToggle('commit')}
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                      selectedTypes.includes('commit')
+                        ? 'bg-yellow-500/20 text-yellow-200'
+                        : 'bg-white/10 text-white/60 hover:bg-white/20'
                     }`}
                   >
-                    1
+                    Commits ({allCommits.length})
                   </button>
-                  {currentPage > 3 && <span className="px-1">...</span>}
-                  {Array.from({ length: Math.min(3, totalPages - 2) }, (_, i) => {
-                    const pageNumber = currentPage <= 3 ? i + 2 : currentPage - 1 + i;
-                    if (pageNumber < totalPages) {
-                      return (
-                        <button
-                          key={pageNumber}
-                          onClick={() => handlePageChange(pageNumber)}
-                          className={`h-8 w-8 rounded-lg ${
-                            currentPage === pageNumber
-                              ? 'bg-blue-500 text-white'
-                              : 'bg-white/10 hover:bg-white/20'
-                          }`}
-                        >
-                          {pageNumber}
-                        </button>
-                      );
-                    }
-                    return null;
-                  })}
-                  {currentPage < totalPages - 2 && <span className="px-1">...</span>}
                   <button
-                    onClick={() => handlePageChange(totalPages)}
-                    className={`h-8 w-8 rounded-lg ${
-                      currentPage === totalPages
-                        ? 'bg-blue-500 text-white'
-                        : 'bg-white/10 hover:bg-white/20'
+                    onClick={() => handleTypeToggle('issue')}
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                      selectedTypes.includes('issue')
+                        ? 'bg-green-500/20 text-green-200'
+                        : 'bg-white/10 text-white/60 hover:bg-white/20'
                     }`}
                   >
-                    {totalPages}
+                    Issues ({issuesAndPRs.filter(item => item.type === 'issue').length})
+                  </button>
+                  <button
+                    onClick={() => handleTypeToggle('pr')}
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                      selectedTypes.includes('pr')
+                        ? 'bg-purple-500/20 text-purple-200'
+                        : 'bg-white/10 text-white/60 hover:bg-white/20'
+                    }`}
+                  >
+                    Pull Requests ({issuesAndPRs.filter(item => item.type === 'pr').length})
                   </button>
                 </div>
 
-                <button
-                  onClick={() => handlePageChange(currentPage + 1)}
-                  disabled={currentPage === totalPages}
-                  className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-50 hover:bg-white/20"
+                <select
+                  value={selectedRepo}
+                  onChange={(e) => handleRepoChange(e.target.value)}
+                  className="rounded-lg bg-white/10 px-3 py-1.5 text-sm text-white"
                 >
-                  Next
-                </button>
+                  {repositories.map(repo => (
+                    <option key={repo} value={repo}>
+                      {repo === 'all' ? 'All Repositories' : repo}
+                    </option>
+                  ))}
+                </select>
               </div>
-            )}
+
+              {paginatedItems.length === 0 ? (
+                <div className="rounded-lg bg-white/5 p-4 text-center text-white/60">
+                  No items match the selected filters
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {paginatedItems.map((item) => {
+                    if ('committedDate' in item) {
+                      // This is a commit
+                      return (
+                        <div key={`commit-${item.oid}`} className="rounded-lg bg-white/10 p-4">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className="inline-block px-2 py-1 text-xs rounded bg-yellow-500/20 text-yellow-200">
+                              Commit
+                            </span>
+                          </div>
+                          <div className="font-semibold">{item.repository.nameWithOwner}</div>
+                          <div className="text-sm text-white/80">{item.messageHeadline}</div>
+                          <div className="mt-2 text-xs text-white/60">
+                            <span className="text-green-400">+{item.additions}</span>
+                            {" / "}
+                            <span className="text-red-400">-{item.deletions}</span>
+                            {" lines"}
+                          </div>
+                          <div className="flex justify-between text-xs text-white/60">
+                            <span>{new Date(item.committedDate).toLocaleDateString()}</span>
+                            <span>
+                              by {item.author.user?.login || 'Unknown'} on {item.branch}
+                            </span>
+                          </div>
+                          <a 
+                            href={item.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="mt-2 inline-block text-xs text-blue-400 hover:underline"
+                          >
+                            View on GitHub
+                          </a>
+                        </div>
+                      );
+                    } else {
+                      // This is an issue or PR
+                      return (
+                        <div key={`issue-${item.id}`} className="rounded-lg bg-white/10 p-4">
+                          <div className="flex items-center gap-2 mb-2">
+                            <span className={`inline-block px-2 py-1 text-xs rounded ${
+                              item.type === 'pr' ? 'bg-purple-500/20 text-purple-200' : 'bg-green-500/20 text-green-200'
+                            }`}>
+                              {item.type === 'pr' ? 'PR' : 'Issue'}
+                            </span>
+                            <span className={`inline-block px-2 py-1 text-xs rounded ${
+                              item.state === 'open' ? 'bg-blue-500/20 text-blue-200' : 'bg-gray-500/20 text-gray-200'
+                            }`}>
+                              {item.state}
+                            </span>
+                          </div>
+                          <div className="font-semibold">{item.repository.nameWithOwner}</div>
+                          <div className="text-sm text-white/80">{item.title}</div>
+                          <div className="mt-2 text-xs text-white/60">
+                            #{item.number} • Updated {new Date(item.updatedAt).toLocaleDateString()}
+                          </div>
+                          <a 
+                            href={item.url} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="mt-2 inline-block text-xs text-blue-400 hover:underline"
+                          >
+                            View on GitHub
+                          </a>
+                        </div>
+                      );
+                    }
+                  })}
+                </div>
+              )}
+
+              {totalPages > 1 && (
+                <div className="mt-8 flex items-center justify-center gap-2">
+                  <button
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={currentPage === 1}
+                    className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-50 hover:bg-white/20"
+                  >
+                    Previous
+                  </button>
+                  
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handlePageChange(1)}
+                      className={`h-8 w-8 rounded-lg ${
+                        currentPage === 1
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-white/10 hover:bg-white/20'
+                      }`}
+                    >
+                      1
+                    </button>
+                    {currentPage > 3 && <span className="px-1">...</span>}
+                    {Array.from({ length: Math.min(3, totalPages - 2) }, (_, i) => {
+                      const pageNumber = currentPage <= 3 ? i + 2 : currentPage - 1 + i;
+                      if (pageNumber < totalPages) {
+                        return (
+                          <button
+                            key={pageNumber}
+                            onClick={() => handlePageChange(pageNumber)}
+                            className={`h-8 w-8 rounded-lg ${
+                              currentPage === pageNumber
+                                ? 'bg-blue-500 text-white'
+                                : 'bg-white/10 hover:bg-white/20'
+                            }`}
+                          >
+                            {pageNumber}
+                          </button>
+                        );
+                      }
+                      return null;
+                    })}
+                    {currentPage < totalPages - 2 && <span className="px-1">...</span>}
+                    <button
+                      onClick={() => handlePageChange(totalPages)}
+                      className={`h-8 w-8 rounded-lg ${
+                        currentPage === totalPages
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-white/10 hover:bg-white/20'
+                      }`}
+                    >
+                      {totalPages}
+                    </button>
+                  </div>
+
+                  <button
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={currentPage === totalPages}
+                    className="rounded-lg bg-white/10 px-4 py-2 text-sm font-semibold disabled:opacity-50 hover:bg-white/20"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
+            </div>
           </>
         )}
       </div>

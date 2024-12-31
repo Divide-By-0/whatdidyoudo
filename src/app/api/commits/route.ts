@@ -57,7 +57,6 @@ export async function GET(request: Request) {
       try {
         for (let i = 0; i < repos.length; i += BATCH_SIZE) {
           const batch = repos.slice(i, i + BATCH_SIZE);
-          console.log(env.GITHUB_TOKEN)
           const batchPromises = batch.map((repo: string) => 
             fetchRepoCommits(repo, env.GITHUB_TOKEN, startDate)
           );

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { fetchRepoCommits, EnrichedCommit } from "../../../lib/github";
-import { env } from "../../../env";
+import { env } from "../../../env.mjs"
 
 const BATCH_SIZE = 3; // Number of repos to process in parallel
 const RATE_LIMIT_DELAY = 1000; // 1 second delay between batches
@@ -57,6 +57,7 @@ export async function GET(request: Request) {
       try {
         for (let i = 0; i < repos.length; i += BATCH_SIZE) {
           const batch = repos.slice(i, i + BATCH_SIZE);
+          console.log(env.GITHUB_TOKEN)
           const batchPromises = batch.map((repo: string) => 
             fetchRepoCommits(repo, env.GITHUB_TOKEN, startDate)
           );

@@ -45,7 +45,6 @@ export default function HomePage() {
   const [issuesAndPRs, setIssuesAndPRs] = useState<IssueOrPR[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20;
-  const [useAnthropic, setUseAnthropic] = useState(false);
 
   const allCommits = useMemo(() => {
     const commitMap = new Map<string, EnrichedCommit>();
@@ -60,7 +59,13 @@ export default function HomePage() {
       .sort((a, b) => new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime());
   }, [commits.defaultBranch, commits.otherBranches]);
 
-  const uniqueRepos = useMemo(() => new Set(allCommits.map(commit => commit.repository.nameWithOwner)).size, [allCommits]);
+  const uniqueRepos = useMemo(() => {
+    const repoSet = new Set([
+      ...allCommits.map(commit => commit.repository.nameWithOwner),
+      ...issuesAndPRs.map(item => item.repository.nameWithOwner)
+    ]);
+    return repoSet.size;
+  }, [allCommits, issuesAndPRs]);
   const uniqueBranches = useMemo(() => new Set(allCommits.map(commit => `${commit.repository.nameWithOwner}:${commit.branch}`)).size, [allCommits]);
 
   const paginatedItems = useMemo(() => {
@@ -211,15 +216,29 @@ export default function HomePage() {
     setProgress(prev => ({ ...prev, stage: 'fetching-issues', message: 'Fetching issues and pull requests...' }));
 
     try {
-      // Build different queries for users vs organizations
-      const query = isOrganization 
-        ? `org:${username} updated:>=${fromDate.toISOString().split('T')[0]}`  // Search in all org repos
-        : `involves:${username} updated:>=${fromDate.toISOString().split('T')[0]}`; // Search for user involvement
+      if (isOrganization) {
+        const query = `org:${username} updated:>=${fromDate.toISOString().split('T')[0]}`;
+        const response = await fetch(
+          `https://api.github.com/search/issues?${new URLSearchParams({
+            q: query,
+            sort: 'updated',
+            order: 'desc',
+            per_page: '100'
+          })}`
+        );
 
+        if (!response.ok) {
+          throw new Error(`GitHub API error: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        setIssuesAndPRs(transformIssuesData(data.items));
+        return;
+      }
       const response = await fetch(
         `https://api.github.com/search/issues?${new URLSearchParams({
-          q: query,
-          sort: 'updated',
+          q: `author:${username} created:>=${fromDate.toISOString().split('T')[0]}`,
+          sort: 'created',
           order: 'desc',
           per_page: '100'
         })}`
@@ -230,9 +249,34 @@ export default function HomePage() {
       }
 
       const data = await response.json();
-      
-      // Transform the data into our format
-      const transformedData: IssueOrPR[] = data.items.map((item: any) => ({
+      setIssuesAndPRs(transformIssuesData(data.items));
+    } finally {
+      setProgress(prev => prev?.stage === 'fetching-issues' ? null : prev);
+    }
+  }
+
+
+  function transformIssuesData(items: any[]): IssueOrPR[] {
+    return items.map((item: any) => {
+      let repoName = 'unknown';
+      if (item.repository?.full_name) {
+        repoName = item.repository.full_name;
+      } else if (item.repository_url) {
+        repoName = item.repository_url.replace('https://api.github.com/repos/', '');
+      } else if (item.url) {
+        const matches = item.url.match(/https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)/);
+        if (matches) {
+          repoName = matches[1];
+        }
+      }
+
+      const isPR = Boolean(
+        item.pull_request || 
+        item.url?.includes('/pulls/') || 
+        item.html_url?.includes('/pull/')
+      );
+
+      return {
         id: item.id,
         title: item.title,
         number: item.number,
@@ -241,15 +285,11 @@ export default function HomePage() {
         updatedAt: item.updated_at,
         url: item.html_url,
         repository: {
-          nameWithOwner: item.repository_url.replace('https://api.github.com/repos/', '')
+          nameWithOwner: repoName
         },
-        type: item.pull_request ? 'pr' : 'issue'
-      }));
-
-      setIssuesAndPRs(transformedData);
-    } finally {
-      setProgress(prev => prev?.stage === 'fetching-issues' ? null : prev);
-    }
+        type: isPR ? 'pr' : 'issue'
+      };
+    });
   }
 
   async function fetchCommits(overrideTimeframe?: string) {
@@ -271,13 +311,12 @@ export default function HomePage() {
     setProgress(null);
     setCommits({ defaultBranch: [], otherBranches: [] });
     setHasSearched(true);
+    setIssuesAndPRs([]);
     
     try {
-      // First check if this is an organization
       const isOrg = await checkIfOrganization(username);
       setIsOrganization(isOrg);
 
-      // Calculate the from date based on timeframe
       const now = new Date();
       let fromDate = new Date();
 
@@ -299,7 +338,6 @@ export default function HomePage() {
           break;
       }
 
-      // Get repositories based on whether this is a user or organization
       const repos = isOrg 
         ? await fetchOrganizationRepos(username, fromDate.toISOString())
         : await fetchUserRepos(username, fromDate.toISOString());
@@ -316,7 +354,6 @@ export default function HomePage() {
         message: 'Starting to process repositories...'
       });
       
-      // Then fetch detailed commit information from our server
       const response = await fetch(
         `/api/commits?${new URLSearchParams({
           username,
@@ -346,13 +383,11 @@ export default function HomePage() {
         buffer += decoder.decode(value as Uint8Array, { stream: true });
         const lines = buffer.split('\n');
         
-        // Process all complete lines
         for (let i = 0; i < lines.length - 1; i++) {
           const line = lines[i]?.trim();
           if (line?.startsWith('data: ')) {
             const data = line.slice(6);
             if (typeof data === 'string' && data.includes('repositories processed')) {
-              // This is a progress update
               const matches = data.match(/(\d+) of (\d+)/);
               if (matches) {
                 const [, processed, total] = matches;
@@ -367,7 +402,6 @@ export default function HomePage() {
               }
             } else if (typeof data === 'string') {
               try {
-                // This should be the final data
                 const commitData = JSON.parse(data);
                 setCommits(commitData);
               } catch (e) {
@@ -377,11 +411,8 @@ export default function HomePage() {
           }
         }
         
-        // Keep the last incomplete line in the buffer
         buffer = lines[lines.length - 1] ?? "";
       }
-
-      // Fetch issues and PRs in parallel with commits
       fetchIssuesAndPRs(fromDate).catch(console.error);
 
     } catch (err) {
@@ -405,7 +436,7 @@ export default function HomePage() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ commits, issuesAndPRs, useAnthropic }),
+        body: JSON.stringify({ commits, issuesAndPRs }),
       });
 
       if (!response.ok || !response.body) {
@@ -458,6 +489,7 @@ export default function HomePage() {
             onChange={(e) => {
               setUsername(e.target.value);
               setCommits({ defaultBranch: [], otherBranches: [] });
+              setIssuesAndPRs([]);
               setIsOrganization(null);
               setProgress(null);
               setHasSearched(false);
@@ -477,6 +509,7 @@ export default function HomePage() {
               const newTimeframe = e.target.value;
               setTimeframe(newTimeframe);
               setCommits({ defaultBranch: [], otherBranches: [] });
+              setIssuesAndPRs([]);
               if (hasSearched) {
                 fetchCommits(newTimeframe);
               }
@@ -545,6 +578,17 @@ export default function HomePage() {
           </div>
         )}
 
+        {(allCommits.length === 0 && issuesAndPRs.length === 0) && hasSearched && !loading && !error && (
+          <div className="mb-4 rounded-lg bg-yellow-500/20 p-4 text-yellow-200">
+            No activity found for {isOrganization ? 'organization' : 'user'} in the selected time period. Try:
+            <ul className="mt-2 list-disc pl-6">
+              <li>Checking if the username is spelled correctly</li>
+              <li>Extending the time period to look further back</li>
+              <li>Confirming the account has public repositories</li>
+            </ul>
+          </div>
+        )}
+
         {(allCommits.length > 0 || issuesAndPRs.length > 0) && (
           <>
             <div className="mb-6 space-y-4">
@@ -556,30 +600,6 @@ export default function HomePage() {
                   <span className="font-bold text-blue-400">{uniqueRepos}</span> repositories
                 </p>
                 <div className="mt-4 flex flex-col items-center gap-3">
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setUseAnthropic(false)}
-                      className={`px-3 py-1 rounded-l-lg ${
-                        !useAnthropic 
-                          ? 'bg-blue-500 text-white' 
-                          : 'bg-white/10 text-white/70 hover:bg-white/20'
-                      }`}
-                    >
-                      OpenAI
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setUseAnthropic(true)}
-                      className={`px-3 py-1 rounded-r-lg ${
-                        useAnthropic 
-                          ? 'bg-blue-500 text-white' 
-                          : 'bg-white/10 text-white/70 hover:bg-white/20'
-                      }`}
-                    >
-                      Claude
-                    </button>
-                  </div>
                   <button
                     onClick={() => generateSummary(allCommits)}
                     disabled={summaryLoading || allCommits.length === 0}

@@ -318,7 +318,7 @@ export default function HomePage() {
       setIsOrganization(isOrg);
 
       const now = new Date();
-      let fromDate = new Date();
+      const fromDate = new Date();
 
       switch (effectiveTimeframe) {
         case "24h":

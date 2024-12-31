@@ -164,7 +164,7 @@ export async function fetchRepoCommits(
     branchCursor,
     commitCursor,
   };
-
+  console.log("hello", token);
   const response = await fetch("https://api.github.com/graphql", {
     method: "POST",
     headers: {

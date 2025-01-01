@@ -3,7 +3,7 @@ import { NextRequest } from 'next/server';
 
 export const runtime = 'edge';
 
-async function loadGoogleFont(font: string, weight: number = 400) {
+async function loadGoogleFont(font: string, weight = 400) {
   const url = `https://fonts.googleapis.com/css2?family=${font}:wght@${weight}`;
   const css = await (await fetch(url)).text();
   const resource = css.match(/src: url\((.+)\) format\('(opentype|truetype)'\)/);

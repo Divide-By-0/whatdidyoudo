@@ -50,6 +50,7 @@ export default function HomePage() {
   const [exportLoading, setExportLoading] = useState(false);
   const [exportError, setExportError] = useState("");
   const [shareUrl, setShareUrl] = useState<string>("");
+  const [showNotification, setShowNotification] = useState(false);
 
   const allCommits = useMemo(() => {
     const commitMap = new Map<string, EnrichedCommit>();
@@ -596,7 +597,16 @@ export default function HomePage() {
   }
 
   async function handleExport() {
-    exportActivity(true);
+    const url = await exportActivity(false);
+    if (url) {
+      try {
+        await navigator.clipboard.writeText(url);
+        setShowNotification(true);
+        setTimeout(() => setShowNotification(false), 3000);
+      } catch (err) {
+        setExportError('Failed to copy to clipboard');
+      }
+    }
   }
 
   async function handleTwitterShare() {
@@ -761,10 +771,16 @@ export default function HomePage() {
             <div className="mb-6 space-y-4">
               <div className="rounded-lg bg-white/5 p-4 text-center">
                 <p className="text-lg text-white/90">
-                  <span className="font-bold text-blue-400">{allCommits.length}</span> commits,{' '}
-                  <span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'issue').length}</span> issues, and{' '}
-                  <span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'pr').length}</span> pull requests across{' '}
-                  <span className="font-bold text-blue-400">{uniqueRepos}</span> repositories
+                  {allCommits.length > 0 && (
+                    <><span className="font-bold text-blue-400">{allCommits.length}</span> commits{(issuesAndPRs.filter(item => item.type === 'issue').length > 0 || issuesAndPRs.filter(item => item.type === 'pr').length > 0) && ','}{' '}</>
+                  )}
+                  {issuesAndPRs.filter(item => item.type === 'issue').length > 0 && (
+                    <><span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'issue').length}</span> issues{issuesAndPRs.filter(item => item.type === 'pr').length > 0 && ','}{' '}</>
+                  )}
+                  {issuesAndPRs.filter(item => item.type === 'pr').length > 0 && (
+                    <><span className="font-bold text-blue-400">{issuesAndPRs.filter(item => item.type === 'pr').length}</span> pull requests{' '}</>
+                  )}
+                  across{' '}<span className="font-bold text-blue-400">{uniqueRepos}</span> repositories
                 </p>
                 <div className="mt-4 flex justify-center gap-4">
                   {summaryLoading && (
@@ -791,17 +807,22 @@ export default function HomePage() {
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                             </svg>
-                            Share...
+                            Generating...
                           </>
                         ) : (
                           <>
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
                             </svg>
-                            Share
+                            Copy Share Link
                           </>
                         )}
                       </button>
+                      {showNotification && (
+                        <div className="fixed top-4 right-4 bg-green-500/90 text-white px-4 py-2 rounded-lg shadow-lg transition-opacity duration-300">
+                          Share link copied to clipboard!
+                        </div>
+                      )}
                       {summary && (
                         <button
                           onClick={handleTwitterShare}

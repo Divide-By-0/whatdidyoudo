@@ -195,10 +195,16 @@ export function SharePageClient({ params }: { params: Promise<{ slug: string }> 
         <div className="space-y-6">
           <div className="rounded-lg bg-white/5 p-4 text-center">
             <p className="text-lg text-white/90">
-              <span className="font-bold text-blue-400">{activity.commits?.length || 0}</span> commits,{' '}
-              <span className="font-bold text-blue-400">{activity.issues?.length || 0}</span> issues, and{' '}
-              <span className="font-bold text-blue-400">{activity.pullRequests?.length || 0}</span> pull requests across{' '}
-              <span className="font-bold text-blue-400">{uniqueRepos}</span> repositories
+              {activity.commits?.length > 0 && (
+                <><span className="font-bold text-blue-400">{activity.commits.length}</span> commits{(activity.issues?.length > 0 || activity.pullRequests?.length > 0) && ','}{' '}</>
+              )}
+              {activity.issues?.length > 0 && (
+                <><span className="font-bold text-blue-400">{activity.issues.length}</span> issues{activity.pullRequests?.length > 0 && ','}{' '}</>
+              )}
+              {activity.pullRequests?.length > 0 && (
+                <><span className="font-bold text-blue-400">{activity.pullRequests.length}</span> pull requests{' '}</>
+              )}
+              across{' '}<span className="font-bold text-blue-400">{uniqueRepos}</span> repositories
             </p>
           </div>
 

@@ -1,16 +1,26 @@
 import { ImageResponse } from '@vercel/og';
 import { NextRequest } from 'next/server';
-import { join } from 'path';
-import { readFileSync } from 'fs';
 
-const geistRegular = readFileSync(join(process.cwd(), 'public', 'Geist-Regular.otf'));
-const geistMedium = readFileSync(join(process.cwd(), 'public', 'Geist-Medium.otf'));
-const geistBold = readFileSync(join(process.cwd(), 'public', 'Geist-Bold.otf'));
-const geistSemi = readFileSync(join(process.cwd(), 'public', 'Geist-Semibold.otf'));
+export const runtime = 'edge';
+
+async function loadGoogleFont(font: string, weight: number = 400) {
+  const url = `https://fonts.googleapis.com/css2?family=${font}:wght@${weight}`;
+  const css = await (await fetch(url)).text();
+  const resource = css.match(/src: url\((.+)\) format\('(opentype|truetype)'\)/);
+ 
+  if (resource && resource[1]) {
+    const response = await fetch(resource[1]);
+    if (response.status == 200) {
+      return await response.arrayBuffer();
+    }
+  }
+ 
+  throw new Error('failed to load font data');
+}
+
 
 export async function GET(req: NextRequest) {
   try {
-    const url = process.env.NEXT_PUBLIC_APP_URL
     const { searchParams } = new URL(req.url);
 
     const username = searchParams.get('username');
@@ -44,7 +54,7 @@ export async function GET(req: NextRequest) {
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: '#030712',
+            backgroundColor: 'black',
             fontFamily: 'Geist Regular',
           }}
         >
@@ -65,7 +75,6 @@ export async function GET(req: NextRequest) {
                 style={{
                   borderRadius: '100px',
                   marginBottom: '10px',
-                  border: '4px solid #1D4ED8'
                 }}
               />
             )}
@@ -81,17 +90,17 @@ export async function GET(req: NextRequest) {
                 WebkitBackgroundClip: 'text',
                 WebkitTextFillColor: 'transparent',
                 letterSpacing: '-0.02em',
-                fontFamily: 'Geist Bold'
+                fontFamily: 'Geist Semibold'
               }}
             >
               {username ? (
-                <>What did <span style={{ color: '#60A5FA', marginLeft: '10px', marginRight: '10px' }}>{username}</span>get done?</>
+                <>What did<span style={{ color: '#60A5FA', marginLeft: '15px', marginRight: '8px' }}>{username}</span>get done?</>
               ) : (
                 'GitHub Activity Summary'
               )}
             </span>
             
-            <div style={{ color: '#9CA3AF', fontSize: 30, marginTop: 8, fontWeight: 500, fontFamily: 'Geist Medium' }}>
+            <div style={{ color: '#9CA3AF', fontSize: 30, marginTop: 8, fontWeight: 500, fontFamily: 'Geist' }}>
               {startDate && endDate ? (
                 `${new Date(startDate).toLocaleString('default', { month: 'short' })} ${new Date(startDate).getDate()}, ${new Date(startDate).getFullYear()} to ${new Date(endDate).toLocaleString('default', { month: 'short' })} ${new Date(endDate).getDate()}, ${new Date(endDate).getFullYear()}`
               ) : null}
@@ -158,23 +167,23 @@ export async function GET(req: NextRequest) {
         fonts: [
           {
             name: "Geist Regular",
-            data: geistRegular,
+            data: await loadGoogleFont('Geist', 400),
             style: "normal",
           },
           {
             name: "Geist Medium", 
-            data: geistMedium,
+            data: await loadGoogleFont('Geist', 500),
             style: "normal",
           },
           {
             name: "Geist Bold",
-            data: geistBold, 
+            data: await loadGoogleFont('Geist', 700),
             style: "normal",
           },
           {
             name: "Geist Semibold",
-            data: geistSemi,
-            style: "normal", 
+            data: await loadGoogleFont('Geist', 600),
+            style: "normal",
           }
         ],
       },

@@ -38,9 +38,7 @@ export async function POST(req: Request) {
 
     const commitsText = commits.map(commit => {
       return `Repository: ${commit.repository.nameWithOwner}
-Message: ${commit.messageHeadline}
-Changes: +${commit.additions} -${commit.deletions} lines
-Date: ${new Date(commit.committedDate).toLocaleDateString()}`;
+Message: ${commit.messageHeadline}`;
     }).join('\n---\n');
 
     const issuesAndPRsText = issuesAndPRs.map(item => {
@@ -48,35 +46,58 @@ Date: ${new Date(commit.committedDate).toLocaleDateString()}`;
 Repository: ${item.repository.nameWithOwner}
 Title: ${item.title}
 State: ${item.state}
-Number: #${item.number}
-Updated: ${new Date(item.updatedAt).toLocaleDateString()}`;
+Number: #${item.number}`;
     }).join('\n---\n');
 
-    const prompt = `Please analyze the following GitHub activity for ${username} and provide a SHORT and CONCISE summary of the contributions made by them in markdown format.
+    const system_prompt = `You are an expert software engineer analyzing GitHub activity to provide concise, technical summaries of developers' contributions. Your goal is to extract the essence of a user's work, focusing on the main features and significant fixes.
 
-COMMITS:
+You will be given the GitHub activity for a user to analyze this activity and provide a brief, technical summary of their contributions. 
+
+Break down the information inside <contribution_breakdown> tags. Here are some guidelines:
+1. Summarize the overall focus of the user's work based on this breakdown
+2. Keep it short and concise
+3. Use hyperlinks to commits, repositories, issues, and pull requests for clarity
+4. Focus on technical details of main features and fixes
+5. Use bullet points for clarity
+6. Do NOT mention the number of commits
+7. Do NOT use bullet points inside list items
+
+Format your summary in markdown. An example structure would be:
+
+<contribution_breakdown>
+### [\`username/repository_name\`](link)
+- [Fixed bug](link to bug) related to XYZ in [repository](link to repository)
+- Added XYZ feature to [repository](link)
+- [Reported bug](link to issue) related to XYZ
+</contribution_breakdown>`
+
+    const prompt = `Here is the GitHub activity for ${username}:
+
+<commits>
 ${commitsText}
+</commits>
 
-ISSUES AND PULL REQUESTS:
+<issues_and_prs>
 ${issuesAndPRsText}
+</issues_and_prs>
 
-Some guidelines:
-1. Include a brief overview of total activity. Talk about features and fixes, not number of commits or contributions made.
-2. Mention significant changes or contributions made. Identify the main features/fixes, you don't have to talk about every individual commit.
-3. Do NOT use nested bullet points. Do NOT talk about number of commits or lines changed.
-
-Focus on technical details. Use bullet points and hyperlinks to organize information.`;
+Remember to keep your summary technical, concise, and focused on the most significant contributions. Avoid verbosity and ensure each point provides valuable insight into the user's work.`;
 
     const encoder = new TextEncoder();
 
     const stream = await anthropic.messages.create({
-      model: 'claude-3-opus-20240229',
+      model: 'claude-3-5-sonnet-20241022',
       max_tokens: 4000,
-      temperature: 0.5,
+      system: system_prompt,
+      temperature: 0.8,
       messages: [
         {
           role: 'user',
           content: prompt
+        },
+        {
+          role: 'assistant',
+          content: '<contribution_breakdown>'
         }
       ],
       stream: true,

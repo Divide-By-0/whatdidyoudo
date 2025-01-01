@@ -65,25 +65,42 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   ogImageUrl.searchParams.set('startDate', startDate);
   ogImageUrl.searchParams.set('endDate', endDate);
 
+  const start = new Date(activity.startTime);
+  const end = new Date(activity.endTime);
+  const diffDays = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+  
+  let timeframe = '';
+  if (diffDays === 1) {
+    timeframe = 'in the last 24 hours';
+  } else if (diffDays === 7) {
+    timeframe = 'this week';
+  } else if (diffDays === 31) {
+    timeframe = 'this month';  
+  } else if (diffDays === 365) {
+    timeframe = 'this year';
+  } else {
+    timeframe = `the last ${diffDays} days`;
+  }
+
   return {
-    title: `${activity.username}'s GitHub Activity Summary`,
-    description: `From ${startDate} to ${endDate}: ${activity.commits.length} commits, ${activity.issues.length} issues, and ${activity.pullRequests.length} pull requests across ${uniqueRepos} repositories.`,
+    title: `What did ${activity.username} do?`,
+    description: `What did ${activity.username} get done ${timeframe}?`,
     openGraph: {
-      title: `${activity.username}'s GitHub Activity Summary`,
-      description: `From ${startDate} to ${endDate}: ${activity.commits.length} commits, ${activity.issues.length} issues, and ${activity.pullRequests.length} pull requests across ${uniqueRepos} repositories.`,
+      title: `What did ${activity.username} do?`,
+      description: `What did ${activity.username} get done ${timeframe}?`,
       images: [
         {
           url: ogImageUrl.toString(),
           width: 1200,
           height: 630,
-          alt: 'GitHub Activity Summary',
+          alt: `What did ${activity.username} do?`,
         },
       ],
     },
     twitter: {
-      card: 'summary_large_image',
-      title: `${activity.username}'s GitHub Activity Summary`,
-      description: `From ${startDate} to ${endDate}: ${activity.commits.length} commits, ${activity.issues.length} issues, and ${activity.pullRequests.length} pull requests across ${uniqueRepos} repositories.`,
+      card: 'summary_large_image', 
+      title: `What did ${activity.username} do?`,
+      description: `What did ${activity.username} get done ${timeframe}?`,
       images: [ogImageUrl.toString()],
     },
   };

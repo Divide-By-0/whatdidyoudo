@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "prisma generate",
     "build": "next build",
     "check": "next lint && tsc --noEmit",
     "dev": "next dev --turbo",

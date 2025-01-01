@@ -13,8 +13,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const activity = await prisma.activitySession.create({
-      data: {
+    const activity = await prisma.activitySession.upsert({
+      where: { id },
+      create: {
         id,
         username,
         startTime: new Date(startTime),
@@ -24,11 +25,20 @@ export async function POST(request: Request) {
         issues: issues || null,
         pullRequests: pullRequests || null,
       },
+      update: {
+        username,
+        startTime: new Date(startTime),
+        endTime: new Date(endTime),
+        summary: summary || "",
+        commits: commits || null,
+        issues: issues || null,
+        pullRequests: pullRequests || null,
+      }
     });
 
     return NextResponse.json(activity);
   } catch (error: any) {
-    console.error("Error saving activity:", error);
+    console.log("Error saving activity:", error);
     return NextResponse.json(
       { error: error.message || "Internal server error" },
       { status: 500 }

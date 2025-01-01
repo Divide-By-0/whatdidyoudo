@@ -16,14 +16,14 @@ datasource db {
 model ActivitySession {
   id            String    @id
   username      String
-  startTime     DateTime
-  endTime       DateTime
+  startTime     DateTime  @db.Timestamp()
+  endTime       DateTime  @db.Timestamp()
   summary       String    @db.Text
   commits       Json?     // Store commits as JSON array
   issues        Json?     // Store issues as JSON array
   pullRequests  Json?     // Store PRs as JSON array
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime  @default(now()) @db.Timestamp()
+  updatedAt     DateTime  @updatedAt @db.Timestamp()
 
   @@index([username])
   @@index([startTime, endTime])

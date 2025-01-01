@@ -49,6 +49,7 @@ export default function HomePage() {
   const itemsPerPage = 20;
   const [exportLoading, setExportLoading] = useState(false);
   const [exportError, setExportError] = useState("");
+  const [shareUrl, setShareUrl] = useState<string>("");
 
   const allCommits = useMemo(() => {
     const commitMap = new Map<string, EnrichedCommit>();
@@ -517,13 +518,16 @@ export default function HomePage() {
     }
   }
 
-  async function handleExport() {
+  async function exportActivity(shouldRedirect: boolean = true) {
     if (!username || (!allCommits.length && !issuesAndPRs.length)) {
-      return;
+      return null;
     }
 
     setExportLoading(true);
     setExportError("");
+    if (shouldRedirect) {
+      setShareUrl("");
+    }
 
     try {
       const now = new Date();
@@ -575,11 +579,33 @@ export default function HomePage() {
       }
 
       const data = await response.json();
-      window.location.href = `/share/${data.id}`;
+      const newShareUrl = `${window.location.origin}/share/${data.id}`;
+      setShareUrl(newShareUrl);
+      
+      if (shouldRedirect) {
+        window.location.href = newShareUrl;
+      }
+      
+      return newShareUrl;
     } catch (err) {
       setExportError(err instanceof Error ? err.message : 'Failed to export activity');
+      return null;
     } finally {
       setExportLoading(false);
+    }
+  }
+
+  async function handleExport() {
+    exportActivity(true);
+  }
+
+  async function handleTwitterShare() {
+    const url = await exportActivity(false);
+    if (url) {
+      window.open(
+        `https://twitter.com/intent/tweet?text=${encodeURIComponent(`Check out my GitHub activity summary! ${url}`)}`,
+        '_blank'
+      );
     }
   }
 
@@ -684,6 +710,12 @@ export default function HomePage() {
           </div>
         )}
 
+        {exportError && (
+          <div className="mb-4 rounded-lg bg-red-500/20 p-4 text-red-200">
+            {exportError}
+          </div>
+        )}
+
         {progress && (
           <div className="mb-4 rounded-lg bg-blue-500/20 p-4 text-blue-200">
             {progress.stage === 'checking-type' && (
@@ -747,35 +779,44 @@ export default function HomePage() {
                     </div>
                   )}
                   {!summaryLoading && (
-                    <button
-                      onClick={handleExport}
-                      disabled={exportLoading}
-                      className="rounded-lg bg-blue-500/20 px-4 py-2 text-sm font-semibold text-blue-200 hover:bg-blue-500/30 disabled:opacity-50 flex items-center gap-2"
-                    >
-                      {exportLoading ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={handleExport}
+                        disabled={exportLoading}
+                        className="rounded-lg bg-blue-500/20 px-4 py-2 text-sm font-semibold text-blue-200 hover:bg-blue-500/30 disabled:opacity-50 flex items-center gap-2"
+                      >
+                        {exportLoading ? (
+                          <>
+                            <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                            Share...
+                          </>
+                        ) : (
+                          <>
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                            </svg>
+                            Share
+                          </>
+                        )}
+                      </button>
+                      {summary && (
+                        <button
+                          onClick={handleTwitterShare}
+                          disabled={exportLoading}
+                          className="rounded-lg bg-[#1DA1F2]/20 px-4 py-2 text-sm font-semibold text-[#1DA1F2] hover:bg-[#1DA1F2]/30 disabled:opacity-50 flex items-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                            <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z"/>
                           </svg>
-                          Share...
-                        </>
-                      ) : (
-                        <>
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-                          </svg>
-                          Share
-                        </>
+                          Share on Twitter
+                        </button>
                       )}
-                    </button>
+                    </div>
                   )}
                 </div>
-                {exportError && (
-                  <div className="mt-2 text-red-400 text-sm">
-                    {exportError}
-                  </div>
-                )}
               </div>
 
               {summaryError && (

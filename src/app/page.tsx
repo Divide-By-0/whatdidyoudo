@@ -932,7 +932,7 @@ export default function HomePage() {
                           <div className="flex justify-between text-xs text-white/60">
                             <span>{new Date(item.committedDate).toLocaleDateString()}</span>
                             <span>
-                              by {item.author.user?.login || 'Unknown'} on {item.branch}
+                            by <a href={`https://github.com/${item.author.user?.login}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{item.author.user?.login || 'Unknown'}</a> on <a href={`https://github.com/${item.repository.nameWithOwner}/tree/${item.branch}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{item.branch}</a>
                             </span>
                           </div>
                           <a 

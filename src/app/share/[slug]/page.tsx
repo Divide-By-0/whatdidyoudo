@@ -31,14 +31,15 @@ interface ActivitySession {
 }
 
 interface Props {
-  params: {
+  params: Promise<{
     slug: string;
-  };
+  }>;
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const resolvedParams = await params;
   const activity = await prisma.activitySession.findUnique({
-    where: { id: params.slug },
+    where: { id: resolvedParams.slug },
   }) as ActivitySession | null;
 
   if (!activity) {
@@ -89,5 +90,5 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 export default async function SharePage({ params }: Props) {
-  return <SharePageClient params={Promise.resolve(params)} />;
+  return <SharePageClient params={params} />;
 }

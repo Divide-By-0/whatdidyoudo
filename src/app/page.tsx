@@ -518,7 +518,7 @@ export default function HomePage() {
     }
   }
 
-  async function exportActivity(shouldRedirect: boolean = true) {
+  async function exportActivity(shouldRedirect = true) {
     if (!username || (!allCommits.length && !issuesAndPRs.length)) {
       return null;
     }

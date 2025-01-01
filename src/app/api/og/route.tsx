@@ -1,7 +1,12 @@
 import { ImageResponse } from '@vercel/og';
 import { NextRequest } from 'next/server';
+import { join } from 'path';
+import { readFileSync } from 'fs';
 
-export const runtime = 'edge';
+const geistRegular = readFileSync(join(process.cwd(), 'public', 'Geist-Regular.otf'));
+const geistMedium = readFileSync(join(process.cwd(), 'public', 'Geist-Medium.otf'));
+const geistBold = readFileSync(join(process.cwd(), 'public', 'Geist-Bold.otf'));
+const geistSemi = readFileSync(join(process.cwd(), 'public', 'Geist-Semibold.otf'));
 
 export async function GET(req: NextRequest) {
   try {
@@ -15,20 +20,6 @@ export async function GET(req: NextRequest) {
     const repos = parseInt(searchParams.get('repos') || '0');
     const startDate = searchParams.get('startDate');
     const endDate = searchParams.get('endDate');
-
-    const fontRegular = await fetch(new URL(`${url}/Geist-Regular.otf`, import.meta.url));
-    const fontMedium = await fetch(new URL(`${url}/Geist-Medium.otf`, import.meta.url));
-    const fontBold = await fetch(new URL(`${url}/Geist-Bold.otf`, import.meta.url));
-    const fontSemi = await fetch(new URL(`${url}/Geist-Semibold.otf`, import.meta.url));
-
-    if (!fontRegular.ok || !fontMedium.ok || !fontBold.ok || !fontSemi.ok) {
-      throw new Error("Failed to fetch font files");
-    }
-
-    const fontDataRegular = await fontRegular.arrayBuffer();
-    const fontDataMedium = await fontMedium.arrayBuffer();
-    const fontDataBold = await fontBold.arrayBuffer();
-    const fontDataSemi = await fontSemi.arrayBuffer();
 
     let avatarUrl = null;
     if (username) {
@@ -94,7 +85,7 @@ export async function GET(req: NextRequest) {
               }}
             >
               {username ? (
-                <>What did <span style={{ color: '#60A5FA', marginLeft: '15px', marginRight: '8px' }}>{username}</span>get done?</>
+                <>What did <span style={{ color: '#60A5FA', marginLeft: '10px', marginRight: '10px' }}>{username}</span>get done?</>
               ) : (
                 'GitHub Activity Summary'
               )}
@@ -167,22 +158,22 @@ export async function GET(req: NextRequest) {
         fonts: [
           {
             name: "Geist Regular",
-            data: fontDataRegular,
+            data: geistRegular,
             style: "normal",
           },
           {
             name: "Geist Medium", 
-            data: fontDataMedium,
+            data: geistMedium,
             style: "normal",
           },
           {
             name: "Geist Bold",
-            data: fontDataBold, 
+            data: geistBold, 
             style: "normal",
           },
           {
             name: "Geist Semibold",
-            data: fontDataSemi,
+            data: geistSemi,
             style: "normal", 
           }
         ],

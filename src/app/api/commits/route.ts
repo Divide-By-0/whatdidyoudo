@@ -5,6 +5,8 @@ import { env } from "../../../env.mjs"
 const BATCH_SIZE = 3; // Number of repos to process in parallel
 const RATE_LIMIT_DELAY = 1000; // 1 second delay between batches
 
+export const runtime = 'edge';
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -38,7 +40,6 @@ export async function GET(request: Request) {
       );
     }
 
-    // Process repositories in batches to manage rate limits
     const allCommits: { 
       defaultBranch: EnrichedCommit[],
       otherBranches: EnrichedCommit[]
@@ -47,31 +48,35 @@ export async function GET(request: Request) {
       otherBranches: []
     };
 
-    // Create a transform stream to send progress updates
-    const stream = new TransformStream();
-    const writer = stream.writable.getWriter();
-    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const encoder = new TextEncoder();
 
-    // Start processing in the background
-    const processPromise = (async () => {
-      try {
-        for (let i = 0; i < repos.length; i += BATCH_SIZE) {
-          const batch = repos.slice(i, i + BATCH_SIZE);
-          const batchPromises = batch.map((repo: string) => 
-            fetchRepoCommits(repo, env.GITHUB_TOKEN, startDate)
-          );
+        try {
+          for (let i = 0; i < repos.length; i += BATCH_SIZE) {
+            const batch = repos.slice(i, i + BATCH_SIZE);
+            const batchPromises = batch.map((repo: string) => 
+              fetchRepoCommits(repo, env.GITHUB_TOKEN, startDate)
+                .catch(error => {
+                  console.error(`Error fetching commits for ${repo}:`, error);
+                  return null;
+                })
+            );
 
-          const batchResults = await Promise.all(batchPromises);
+            const batchResults = await Promise.all(batchPromises);
 
-          batchResults.forEach((result) => {
-            const repository = result.data.repository;
-            const defaultBranchName = repository.defaultBranchRef.name;
+            batchResults.forEach((result) => {
+              if (!result?.data?.repository) return;
+              
+              const repository = result.data.repository;
+              const defaultBranchName = repository.defaultBranchRef?.name;
+              if (!defaultBranchName) return;
 
-            repository.refs.nodes.forEach((branch) => {
-              if (branch.target && branch.target.history) {
-                // For organizations, include all commits. For users, filter by author
+              repository.refs.nodes.forEach((branch) => {
+                if (!branch?.target?.history?.nodes) return;
+
                 const commits = branch.target.history.nodes
-                  .filter(commit => isOrg || commit.author.user?.login?.toLowerCase() === username.toLowerCase())
+                  .filter(commit => commit && (isOrg || commit.author?.user?.login?.toLowerCase() === username.toLowerCase()))
                   .map(commit => ({
                     ...commit,
                     repository: {
@@ -84,42 +89,43 @@ export async function GET(request: Request) {
                 if (branch.name === defaultBranchName) {
                   allCommits.defaultBranch.push(...commits);
                 } else {
-                  // Only include unmerged commits from non-default branches
                   allCommits.otherBranches.push(...commits);
                 }
-              }
+              });
             });
-          });
 
-          // Send progress update
-          await writer.write(
-            encoder.encode(`data: ${Math.min(i + BATCH_SIZE, repos.length)} of ${repos.length} repositories processed\n\n`)
+            try {
+              controller.enqueue(
+                encoder.encode(`data: ${Math.min(i + BATCH_SIZE, repos.length)} of ${repos.length} repositories processed\n\n`)
+              );
+            } catch (error) {
+              console.error('Error sending progress update:', error);
+            }
+
+            if (i + BATCH_SIZE < repos.length) {
+              await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
+            }
+          }
+
+          allCommits.defaultBranch.sort((a, b) => 
+            new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime()
+          );
+          allCommits.otherBranches.sort((a, b) => 
+            new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime()
           );
 
-          // Add delay between batches to respect rate limits
-          if (i + BATCH_SIZE < repos.length) {
-            await new Promise(resolve => setTimeout(resolve, RATE_LIMIT_DELAY));
-          }
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(allCommits)}\n\n`)
+          );
+        } catch (error) {
+          console.error('Error processing commits:', error);
+        } finally {
+          controller.close();
         }
-
-        // Sort commits by date
-        allCommits.defaultBranch.sort((a, b) => 
-          new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime()
-        );
-        allCommits.otherBranches.sort((a, b) => 
-          new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime()
-        );
-
-        // Send the final data
-        await writer.write(
-          encoder.encode(`data: ${JSON.stringify(allCommits)}\n\n`)
-        );
-      } finally {
-        await writer.close();
       }
-    })();
+    });
 
-    return new Response(stream.readable, {
+    return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -128,7 +134,7 @@ export async function GET(request: Request) {
     });
 
   } catch (error: any) {
-    console.error("Error fetching commits:", error);
+    console.error("Error in commits endpoint:", error);
     return NextResponse.json(
       { error: error.message || "Internal server error" },
       { status: 500 }

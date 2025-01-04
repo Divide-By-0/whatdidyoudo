@@ -6,7 +6,7 @@ import { type Metadata } from "next";
 export const metadata: Metadata = {
   title: "What did you get done?",
   description: "Inspired by Elon Musk's 'What did you get done this week?' question, this app allows you to track your GitHub activity over the last 24 hours, week, month, or custom timeframe.",
-  icons: [{ rel: "icon", url: "/favicon.ico" }],
+  icons: [{ rel: "icon", url: "/favicon.png" }],
   openGraph: {
     title: `What did you get done?`,
     description: "Inspired by Elon Musk's 'What did you get done this week?' question, this app allows you to track your GitHub activity over the last 24 hours, week, month, or custom timeframe.",
@@ -18,6 +18,8 @@ export const metadata: Metadata = {
         alt: "What did you get done?",
       },
     ],
+    siteName: `What did you get done?`,
+    url: 'https://www.whatdidyoudo.dev'
   },
   twitter: {
     card: 'summary_large_image', 

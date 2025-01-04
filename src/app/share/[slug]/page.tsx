@@ -96,6 +96,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
           alt: `What did ${activity.username} do?`,
         },
       ],
+      siteName: `What did you get done?`,
+      url: `https://www.whatdidyoudo.dev/share/${resolvedParams.slug}`
     },
     twitter: {
       card: 'summary_large_image', 

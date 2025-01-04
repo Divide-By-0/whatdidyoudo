@@ -327,6 +327,17 @@ export default function HomePage() {
       return;
     }
 
+    try {
+      const userResponse = await fetch(`https://api.github.com/users/${username}`);
+      if (!userResponse.ok) {
+        setError(`User or organization "${username}" does not exist on GitHub`);
+        return;
+      }
+    } catch (err) {
+      setError("Failed to verify username existence");
+      return;
+    }
+
     const effectiveTimeframe = overrideTimeframe || timeframe;
 
     if (effectiveTimeframe === "custom" && (isNaN(Number(customDays)) || Number(customDays) < 1)) {

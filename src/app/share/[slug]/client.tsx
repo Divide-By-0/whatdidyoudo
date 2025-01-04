@@ -55,10 +55,10 @@ export function SharePageClient({ params }: { params: Promise<{ slug: string }> 
       try {
         const { slug } = await params;
         const response = await fetch(`/api/activity?id=${slug}`);
-        if (!response.ok) {
-          throw new Error('Failed to fetch activity');
-        }
         const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Failed to fetch activity');
+        }
         setActivity(data);
         
         const isOrg = await checkIfOrganization(data.username);
@@ -161,8 +161,16 @@ export function SharePageClient({ params }: { params: Promise<{ slug: string }> 
     return (
       <main className="flex min-h-screen flex-col items-center bg-black p-8 text-white">
         <div className="w-full max-w-4xl">
-          <div className="rounded-lg bg-red-500/20 p-4 text-red-200">
+          <div className="rounded-lg bg-red-500/20 p-4 text-red-200 mb-4">
             {error || 'Activity not found'}
+          </div>
+          <div className="flex justify-center">
+            <a 
+              href="/"
+              className="inline-flex items-center justify-center rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600 transition-colors"
+            >
+              Go Home
+            </a>
           </div>
         </div>
       </main>
@@ -180,7 +188,7 @@ export function SharePageClient({ params }: { params: Promise<{ slug: string }> 
   return (
     <main className="flex min-h-screen flex-col items-center bg-black p-8 text-white">
       <div className="w-full max-w-4xl">
-        <h1 className="mb-8 text-center text-4xl font-bold">
+        <h1 className="mb-4 text-center text-4xl font-bold">
           {isOrganization ? (
             <>What happened in <span className="font-bold text-blue-400">{activity.username}</span>?</>
           ) : (
@@ -429,6 +437,12 @@ export function SharePageClient({ params }: { params: Promise<{ slug: string }> 
           </div>
         </div>
       </div>
+      <a
+        href="/"
+        className="hidden md:block fixed bottom-8 right-8 inline-flex items-center gap-2 rounded-full bg-blue-500/10 px-4 py-2 text-sm text-blue-400 hover:bg-blue-500/20 transition-colors border border-blue-500/20 hover:border-blue-500/30"
+      >
+        Generate your own →
+      </a>
     </main>
   );
 } 

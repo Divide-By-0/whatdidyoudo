@@ -56,6 +56,12 @@ export async function GET(request: Request) {
       const activity = await prisma.activitySession.findUnique({
         where: { id }
       });
+      if (!activity) {
+        return NextResponse.json(
+          { error: "Activity not found. The link may have expired or the activity may have been deleted. Please try generating a new activity summary." },
+          { status: 500 }
+        );
+      }
       return NextResponse.json(activity);
     }
 

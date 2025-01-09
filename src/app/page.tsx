@@ -559,6 +559,10 @@ export default function HomePage() {
           fromDate.setFullYear(now.getFullYear() - 1);
           break;
         case "custom":
+          if (isNaN(Number(customDays)) || Number(customDays) < 1) {
+            setExportError("Invalid number of days");
+            return null;
+          }
           fromDate.setDate(now.getDate() - Number(customDays));
           break;
       }
@@ -612,6 +616,7 @@ export default function HomePage() {
     if (url) {
       try {
         await navigator.clipboard.writeText(url);
+        window.history.pushState(null, '', url);
         setShowNotification(true);
         setTimeout(() => setShowNotification(false), 3000);
       } catch (err) {
@@ -670,9 +675,11 @@ export default function HomePage() {
               setProgress(null);
               setHasSearched(false);
               setSummary("");
+              window.history.pushState(null, '', '/');
             }}
             onKeyDown={(e) => {
               if (e.key === 'Enter') {
+                window.history.pushState(null, '', '/');
                 fetchCommits();
               }
             }}
@@ -688,9 +695,8 @@ export default function HomePage() {
               setCommits({ defaultBranch: [], otherBranches: [] });
               setIssuesAndPRs([]);
               setSummary("");
-              if (hasSearched) {
-                fetchCommits(newTimeframe);
-              }
+              setHasSearched(false);
+              window.history.pushState(null, '', '/');
             }}
             className="rounded-lg bg-white/10 px-4 py-2 text-white"
           >
@@ -708,7 +714,16 @@ export default function HomePage() {
               onChange={(e) => {
                 setCustomDays(e.target.value);
                 setCommits({ defaultBranch: [], otherBranches: [] });
+                setIssuesAndPRs([]);
                 setSummary("");
+                setHasSearched(false);
+                window.history.pushState(null, '', '/');
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  window.history.pushState(null, '', '/');
+                  fetchCommits();
+                }
               }}
               min="1"
               placeholder="Number of days"
@@ -717,7 +732,10 @@ export default function HomePage() {
           )}
 
           <button
-            onClick={() => fetchCommits()}
+            onClick={() => {
+              window.history.pushState(null, '', '/');
+              fetchCommits();
+            }}
             disabled={loading}
             className="rounded-lg bg-white/20 px-6 py-2 font-semibold hover:bg-white/30 disabled:opacity-50"
           >

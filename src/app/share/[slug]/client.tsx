@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { EnrichedCommit } from "../../../lib/github";
 import ReactMarkdown from 'react-markdown';
+import Link from "next/link";
 
 interface IssueOrPR {
   id: number;
@@ -165,12 +166,12 @@ export function SharePageClient({ params }: { params: Promise<{ slug: string }> 
             {error || 'Activity not found'}
           </div>
           <div className="flex justify-center">
-            <a 
+            <Link 
               href="/"
               className="inline-flex items-center justify-center rounded-lg bg-blue-500 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-600 transition-colors"
             >
               Go Home
-            </a>
+            </Link>
           </div>
         </div>
       </main>
@@ -437,12 +438,12 @@ export function SharePageClient({ params }: { params: Promise<{ slug: string }> 
           </div>
         </div>
       </div>
-      <a
+      <Link
         href="/"
         className="hidden md:block fixed bottom-8 right-8 inline-flex items-center gap-2 rounded-full bg-blue-500/10 px-4 py-2 text-sm text-blue-400 hover:bg-blue-500/20 transition-colors border border-blue-500/20 hover:border-blue-500/30"
       >
         Generate your own →
-      </a>
+      </Link>
     </main>
   );
 } 

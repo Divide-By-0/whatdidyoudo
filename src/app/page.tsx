@@ -130,12 +130,13 @@ export default function HomePage() {
       const urlCustomDays = params.get('customDays');
 
       if (urlUsername) {
-        await Promise.all([
-          setUsername(urlUsername),
-          urlTimeframe && setTimeframe(urlTimeframe as any),
-          urlTimeframe === 'custom' && urlCustomDays && setCustomDays(urlCustomDays)
-        ]);
-        window.history.replaceState({}, '', '/');
+        setUsername(urlUsername)
+        if (urlTimeframe) {
+          setTimeframe(urlTimeframe as any)
+        }
+        if (urlTimeframe == 'custom' && urlCustomDays) {
+          setCustomDays(urlCustomDays)
+        }
         fetchCommits();
       }
     }

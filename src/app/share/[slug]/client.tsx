@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo } from "react";
 import { EnrichedCommit } from "../../../lib/github";
 import ReactMarkdown from 'react-markdown';
 import Link from "next/link";
+import { useRouter } from 'next/navigation';
 
 interface IssueOrPR {
   id: number;
@@ -32,7 +33,60 @@ interface ActivitySession {
   updatedAt: string;
 }
 
+interface ParsedSlug {
+  username: string;
+  startDate: Date;
+  endDate: Date;
+  timeframe?: '24h' | 'week' | 'month' | 'year' | 'custom';
+  customDays?: number;
+}
+
+function parseSlug(slug: string): ParsedSlug | null {
+  try {
+    // Expected format: username-YYYY-MM-DD-to-YYYY-MM-DD
+    const parts = slug.split('-');
+    if (parts.length < 5) return null;
+
+    const toIndex = parts.indexOf('to');
+    if (toIndex === -1) return null;
+
+    const username = parts.slice(0, toIndex - 3).join('-');
+    const startDateStr = parts.slice(toIndex - 3, toIndex).join('-');
+    const endDateStr = parts.slice(toIndex + 1).join('-');
+
+    const startDate = new Date(startDateStr);
+    const endDate = new Date(endDateStr);
+
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) return null;
+
+    // Calculate timeframe
+    const diffDays = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+    let timeframe: ParsedSlug['timeframe'];
+    let customDays: number | undefined;
+
+    if (diffDays === 1) timeframe = '24h';
+    else if (diffDays === 7) timeframe = 'week';
+    else if (diffDays === 31 || diffDays == 30 || diffDays == 29) timeframe = 'month';
+    else if (diffDays === 365 || diffDays == 366) timeframe = 'year';
+    else {
+      timeframe = 'custom';
+      customDays = diffDays;
+    }
+
+    return {
+      username,
+      startDate,
+      endDate,
+      timeframe,
+      customDays
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function SharePageClient({ params }: { params: Promise<{ slug: string }> }) {
+  const router = useRouter();
   const [activity, setActivity] = useState<ActivitySession | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -57,11 +111,17 @@ export function SharePageClient({ params }: { params: Promise<{ slug: string }> 
         const { slug } = await params;
         const response = await fetch(`/api/activity?id=${slug}`);
         const data = await response.json();
+        
         if (!response.ok) {
+          const parsedSlug = parseSlug(slug);
+          if (parsedSlug) {
+            router.replace(`/?username=${parsedSlug.username}&timeframe=${parsedSlug.timeframe}${parsedSlug.customDays ? `&customDays=${parsedSlug.customDays}` : ''}`);
+            return;
+          }
           throw new Error(data.error || 'Failed to fetch activity');
         }
-        setActivity(data);
         
+        setActivity(data);
         const isOrg = await checkIfOrganization(data.username);
         setIsOrganization(isOrg);
       } catch (err) {
@@ -72,7 +132,7 @@ export function SharePageClient({ params }: { params: Promise<{ slug: string }> 
     }
 
     fetchActivity();
-  }, [params]);
+  }, [params, router]);
 
   const handlePageChange = (newPage: number) => {
     setCurrentPage(newPage);

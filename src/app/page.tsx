@@ -54,13 +54,13 @@ export default function HomePage() {
 
   const allCommits = useMemo(() => {
     const commitMap = new Map<string, EnrichedCommit>();
-    
+
     [...commits.defaultBranch, ...commits.otherBranches].forEach(commit => {
       if (!commitMap.has(commit.oid)) {
         commitMap.set(commit.oid, commit);
       }
     });
-    
+
     return Array.from(commitMap.values())
       .sort((a, b) => new Date(b.committedDate).getTime() - new Date(a.committedDate).getTime());
   }, [commits.defaultBranch, commits.otherBranches]);
@@ -79,7 +79,7 @@ export default function HomePage() {
       ...allCommits.map(commit => commit.repository.nameWithOwner),
       ...issuesAndPRs.map(item => item.repository.nameWithOwner)
     ]);
-    
+
     return ['all', ...Array.from(repoSet)].sort();
   }, [allCommits, issuesAndPRs]);
 
@@ -89,12 +89,12 @@ export default function HomePage() {
       ...(selectedTypes.includes('issue') ? issuesAndPRs.filter(item => item.type === 'issue') : []),
       ...(selectedTypes.includes('pr') ? issuesAndPRs.filter(item => item.type === 'pr') : [])
     ]
-    .filter(item => selectedRepo === 'all' || item.repository.nameWithOwner === selectedRepo)
-    .sort((a, b) => {
-      const dateA = new Date('committedDate' in a ? a.committedDate : a.updatedAt).getTime();
-      const dateB = new Date('committedDate' in b ? b.committedDate : b.updatedAt).getTime();
-      return dateB - dateA;
-    });
+      .filter(item => selectedRepo === 'all' || item.repository.nameWithOwner === selectedRepo)
+      .sort((a, b) => {
+        const dateA = new Date('committedDate' in a ? a.committedDate : a.updatedAt).getTime();
+        const dateB = new Date('committedDate' in b ? b.committedDate : b.updatedAt).getTime();
+        return dateB - dateA;
+      });
 
     const startIndex = (currentPage - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
@@ -107,9 +107,9 @@ export default function HomePage() {
       ...(selectedTypes.includes('issue') ? issuesAndPRs.filter(item => item.type === 'issue') : []),
       ...(selectedTypes.includes('pr') ? issuesAndPRs.filter(item => item.type === 'pr') : [])
     ]
-    .filter(item => selectedRepo === 'all' || item.repository.nameWithOwner === selectedRepo)
+      .filter(item => selectedRepo === 'all' || item.repository.nameWithOwner === selectedRepo)
       .length;
-    
+
     return Math.ceil(filteredCount / itemsPerPage);
   }, [allCommits, issuesAndPRs, selectedTypes, selectedRepo]);
 
@@ -120,6 +120,27 @@ export default function HomePage() {
 
   useEffect(() => {
     setCurrentPage(1);
+  }, [username, timeframe, customDays]);
+
+  useEffect(() => {
+    async function f() {
+      const params = new URLSearchParams(window.location.search);
+      const urlUsername = params.get('username');
+      const urlTimeframe = params.get('timeframe');
+      const urlCustomDays = params.get('customDays');
+
+      if (urlUsername) {
+        await Promise.all([
+          setUsername(urlUsername),
+          urlTimeframe && setTimeframe(urlTimeframe as any),
+          urlTimeframe === 'custom' && urlCustomDays && setCustomDays(urlCustomDays)
+        ]);
+        window.history.replaceState({}, '', '/');
+        fetchCommits();
+      }
+    }
+
+    f().catch(console.error);
   }, [username, timeframe, customDays]);
 
   async function checkIfOrganization(name: string): Promise<boolean> {
@@ -157,7 +178,7 @@ export default function HomePage() {
       repos.forEach((repo: any) => {
         if (new Date(repo.pushed_at) >= new Date(since)) {
           repoSet.add(repo.full_name);
-          setProgress(prev => prev?.stage === 'finding-repos' 
+          setProgress(prev => prev?.stage === 'finding-repos'
             ? { ...prev, reposFound: repoSet.size }
             : prev
           );
@@ -178,7 +199,7 @@ export default function HomePage() {
     const eventsResponse = await fetch(
       `https://api.github.com/users/${username}/events/public`
     );
-    
+
     if (!eventsResponse.ok) {
       throw new Error(`GitHub API error: ${eventsResponse.statusText}`);
     }
@@ -189,7 +210,7 @@ export default function HomePage() {
     events.forEach((event: any) => {
       if (event.repo) {
         repoSet.add(event.repo.name);
-        setProgress(prev => prev?.stage === 'finding-repos' 
+        setProgress(prev => prev?.stage === 'finding-repos'
           ? { ...prev, reposFound: repoSet.size }
           : prev
         );
@@ -206,7 +227,7 @@ export default function HomePage() {
       repos.forEach((repo: any) => {
         if (new Date(repo.pushed_at) >= new Date(since)) {
           repoSet.add(repo.full_name);
-          setProgress(prev => prev?.stage === 'finding-repos' 
+          setProgress(prev => prev?.stage === 'finding-repos'
             ? { ...prev, reposFound: repoSet.size }
             : prev
           );
@@ -229,7 +250,7 @@ export default function HomePage() {
       contributedData.items?.forEach((item: any) => {
         if (item.repository) {
           repoSet.add(item.repository.full_name);
-          setProgress(prev => prev?.stage === 'finding-repos' 
+          setProgress(prev => prev?.stage === 'finding-repos'
             ? { ...prev, reposFound: repoSet.size }
             : prev
           );
@@ -300,8 +321,8 @@ export default function HomePage() {
       }
 
       const isPR = Boolean(
-        item.pull_request || 
-        item.url?.includes('/pulls/') || 
+        item.pull_request ||
+        item.url?.includes('/pulls/') ||
         item.html_url?.includes('/pull/')
       );
 
@@ -321,7 +342,7 @@ export default function HomePage() {
     });
   }
 
-  async function fetchCommits(overrideTimeframe?: string) {
+  async function fetchCommits() {
     if (!username) {
       setError("Please enter a GitHub username or organization");
       return;
@@ -338,7 +359,7 @@ export default function HomePage() {
       return;
     }
 
-    const effectiveTimeframe = overrideTimeframe || timeframe;
+    const effectiveTimeframe = timeframe;
 
     if (effectiveTimeframe === "custom" && (isNaN(Number(customDays)) || Number(customDays) < 1)) {
       setError("Please enter a valid number of days (minimum 1)");
@@ -352,7 +373,7 @@ export default function HomePage() {
     setCommits({ defaultBranch: [], otherBranches: [] });
     setHasSearched(true);
     setIssuesAndPRs([]);
-    
+
     try {
       const isOrg = await checkIfOrganization(username);
       setIsOrganization(isOrg);
@@ -378,7 +399,7 @@ export default function HomePage() {
           break;
       }
 
-      const repos = isOrg 
+      const repos = isOrg
         ? await fetchOrganizationRepos(username, fromDate.toISOString())
         : await fetchUserRepos(username, fromDate.toISOString());
 
@@ -387,13 +408,13 @@ export default function HomePage() {
         return;
       }
 
-      setProgress({ 
-        stage: 'fetching-commits', 
-        reposProcessed: 0, 
+      setProgress({
+        stage: 'fetching-commits',
+        reposProcessed: 0,
         totalRepos: repos.length,
         message: 'Starting to process repositories...'
       });
-      
+
       const response = await fetch(
         `/api/commits?${new URLSearchParams({
           username,
@@ -424,7 +445,7 @@ export default function HomePage() {
 
         buffer += decoder.decode(value as Uint8Array, { stream: true });
         const lines = buffer.split('\n');
-        
+
         for (let i = 0; i < lines.length - 1; i++) {
           const line = lines[i]?.trim();
           if (line?.startsWith('data: ')) {
@@ -434,11 +455,11 @@ export default function HomePage() {
               if (matches) {
                 const [, processed, total] = matches;
                 setProgress(prev => prev?.stage === 'fetching-commits'
-                  ? { 
-                      ...prev, 
-                      reposProcessed: parseInt(processed ?? "0", 10),
-                      message: data
-                    }
+                  ? {
+                    ...prev,
+                    reposProcessed: parseInt(processed ?? "0", 10),
+                    message: data
+                  }
                   : prev
                 );
               }
@@ -453,13 +474,13 @@ export default function HomePage() {
             }
           }
         }
-        
+
         buffer = lines[lines.length - 1] ?? "";
       }
 
       const allLatestCommits = [...(latestCommitData?.defaultBranch || []), ...(latestCommitData?.otherBranches || [])];
-      
-      setProgress({ 
+
+      setProgress({
         stage: 'fetching-issues',
         message: 'Fetching issues and pull requests...'
       });
@@ -511,7 +532,7 @@ export default function HomePage() {
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
-        
+
         for (let i = 0; i < lines.length - 1; i++) {
           const line = lines[i]?.trim() || '';
           if (line === '[DONE]') {
@@ -519,7 +540,7 @@ export default function HomePage() {
           }
           setSummary(prev => prev + line.replace("</contribution_breakdown>", "") + '\n');
         }
-        
+
         buffer = lines[lines.length - 1] || '';
       }
     } catch (err) {
@@ -572,7 +593,7 @@ export default function HomePage() {
       };
 
       const id = `${username}-${formatDate(fromDate)}-to-${formatDate(now)}`;
-      
+
       const response = await fetch('/api/activity', {
         method: 'POST',
         headers: {
@@ -597,11 +618,11 @@ export default function HomePage() {
       const data = await response.json();
       const newShareUrl = `${window.location.origin}/share/${data.id}`;
       setShareUrl(newShareUrl);
-      
+
       if (shouldRedirect) {
         window.location.href = newShareUrl;
       }
-      
+
       return newShareUrl;
     } catch (err) {
       setExportError(err instanceof Error ? err.message : 'Failed to export activity');
@@ -686,7 +707,7 @@ export default function HomePage() {
             placeholder="GitHub username or organization"
             className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-white placeholder:text-white/50"
           />
-          
+
           <select
             value={timeframe}
             onChange={(e) => {
@@ -768,10 +789,10 @@ export default function HomePage() {
                 <p>{progress.message}</p>
                 {progress.reposProcessed !== undefined && progress.totalRepos && (
                   <div className="mt-2 h-2 w-full rounded-full bg-blue-900">
-                    <div 
+                    <div
                       className="h-full rounded-full bg-blue-500 transition-all duration-300"
-                      style={{ 
-                        width: `${(progress.reposProcessed / progress.totalRepos) * 100}%` 
+                      style={{
+                        width: `${(progress.reposProcessed / progress.totalRepos) * 100}%`
                       }}
                     />
                   </div>
@@ -859,7 +880,7 @@ export default function HomePage() {
                           className="rounded-lg bg-[#1DA1F2]/20 px-4 py-2 text-sm font-semibold text-[#1DA1F2] hover:bg-[#1DA1F2]/30 disabled:opacity-50 flex items-center gap-2"
                         >
                           <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                            <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z"/>
+                            <path d="M23.953 4.57a10 10 0 01-2.825.775 4.958 4.958 0 002.163-2.723c-.951.555-2.005.959-3.127 1.184a4.92 4.92 0 00-8.384 4.482C7.69 8.095 4.067 6.13 1.64 3.162a4.822 4.822 0 00-.666 2.475c0 1.71.87 3.213 2.188 4.096a4.904 4.904 0 01-2.228-.616v.06a4.923 4.923 0 003.946 4.827 4.996 4.996 0 01-2.212.085 4.936 4.936 0 004.604 3.417 9.867 9.867 0 01-6.102 2.105c-.39 0-.779-.023-1.17-.067a13.995 13.995 0 007.557 2.209c9.053 0 13.998-7.496 13.998-13.985 0-.21 0-.42-.015-.63A9.935 9.935 0 0024 4.59z" />
                           </svg>
                           Share on Twitter
                         </button>
@@ -912,31 +933,28 @@ export default function HomePage() {
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => handleTypeToggle('commit')}
-                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                      selectedTypes.includes('commit')
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${selectedTypes.includes('commit')
                         ? 'bg-yellow-500/20 text-yellow-200'
                         : 'bg-white/10 text-white/60 hover:bg-white/20'
-                    }`}
+                      }`}
                   >
                     Commits ({allCommits.length})
                   </button>
                   <button
                     onClick={() => handleTypeToggle('issue')}
-                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                      selectedTypes.includes('issue')
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${selectedTypes.includes('issue')
                         ? 'bg-green-500/20 text-green-200'
                         : 'bg-white/10 text-white/60 hover:bg-white/20'
-                    }`}
+                      }`}
                   >
                     Issues ({issuesAndPRs.filter(item => item.type === 'issue').length})
                   </button>
                   <button
                     onClick={() => handleTypeToggle('pr')}
-                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                      selectedTypes.includes('pr')
+                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${selectedTypes.includes('pr')
                         ? 'bg-purple-500/20 text-purple-200'
                         : 'bg-white/10 text-white/60 hover:bg-white/20'
-                    }`}
+                      }`}
                   >
                     Pull Requests ({issuesAndPRs.filter(item => item.type === 'pr').length})
                   </button>
@@ -982,13 +1000,13 @@ export default function HomePage() {
                           <div className="flex justify-between text-xs text-white/60">
                             <span>{new Date(item.committedDate).toLocaleDateString()}</span>
                             <span>
-                            by <a href={`https://github.com/${item.author.user?.login}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{item.author.user?.login || 'Unknown'}</a> on <a href={`https://github.com/${item.repository.nameWithOwner}/tree/${item.branch}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{item.branch}</a>
+                              by <a href={`https://github.com/${item.author.user?.login}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{item.author.user?.login || 'Unknown'}</a> on <a href={`https://github.com/${item.repository.nameWithOwner}/tree/${item.branch}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">{item.branch}</a>
                             </span>
                           </div>
-                          <a 
-                            href={item.url} 
-                            target="_blank" 
-                            rel="noopener noreferrer" 
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="mt-2 inline-block text-xs text-blue-400 hover:underline"
                           >
                             View on GitHub
@@ -1000,14 +1018,12 @@ export default function HomePage() {
                       return (
                         <div key={`issue-${item.id}`} className="rounded-lg bg-white/10 p-4">
                           <div className="flex items-center gap-2 mb-2">
-                            <span className={`inline-block px-2 py-1 text-xs rounded ${
-                              item.type === 'pr' ? 'bg-purple-500/20 text-purple-200' : 'bg-green-500/20 text-green-200'
-                            }`}>
+                            <span className={`inline-block px-2 py-1 text-xs rounded ${item.type === 'pr' ? 'bg-purple-500/20 text-purple-200' : 'bg-green-500/20 text-green-200'
+                              }`}>
                               {item.type === 'pr' ? 'PR' : 'Issue'}
                             </span>
-                            <span className={`inline-block px-2 py-1 text-xs rounded ${
-                              item.state === 'open' ? 'bg-blue-500/20 text-blue-200' : 'bg-gray-500/20 text-gray-200'
-                            }`}>
+                            <span className={`inline-block px-2 py-1 text-xs rounded ${item.state === 'open' ? 'bg-blue-500/20 text-blue-200' : 'bg-gray-500/20 text-gray-200'
+                              }`}>
                               {item.state}
                             </span>
                           </div>
@@ -1016,10 +1032,10 @@ export default function HomePage() {
                           <div className="mt-2 text-xs text-white/60">
                             #{item.number} • Updated {new Date(item.updatedAt).toLocaleDateString()}
                           </div>
-                          <a 
-                            href={item.url} 
-                            target="_blank" 
-                            rel="noopener noreferrer" 
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
                             className="mt-2 inline-block text-xs text-blue-400 hover:underline"
                           >
                             View on GitHub
@@ -1040,15 +1056,14 @@ export default function HomePage() {
                   >
                     Previous
                   </button>
-                  
+
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => handlePageChange(1)}
-                      className={`h-8 w-8 rounded-lg ${
-                        currentPage === 1
+                      className={`h-8 w-8 rounded-lg ${currentPage === 1
                           ? 'bg-blue-500 text-white'
                           : 'bg-white/10 hover:bg-white/20'
-                      }`}
+                        }`}
                     >
                       1
                     </button>
@@ -1060,11 +1075,10 @@ export default function HomePage() {
                           <button
                             key={pageNumber}
                             onClick={() => handlePageChange(pageNumber)}
-                            className={`h-8 w-8 rounded-lg ${
-                              currentPage === pageNumber
+                            className={`h-8 w-8 rounded-lg ${currentPage === pageNumber
                                 ? 'bg-blue-500 text-white'
                                 : 'bg-white/10 hover:bg-white/20'
-                            }`}
+                              }`}
                           >
                             {pageNumber}
                           </button>
@@ -1075,11 +1089,10 @@ export default function HomePage() {
                     {currentPage < totalPages - 2 && <span className="px-1">...</span>}
                     <button
                       onClick={() => handlePageChange(totalPages)}
-                      className={`h-8 w-8 rounded-lg ${
-                        currentPage === totalPages
+                      className={`h-8 w-8 rounded-lg ${currentPage === totalPages
                           ? 'bg-blue-500 text-white'
                           : 'bg-white/10 hover:bg-white/20'
-                      }`}
+                        }`}
                     >
                       {totalPages}
                     </button>

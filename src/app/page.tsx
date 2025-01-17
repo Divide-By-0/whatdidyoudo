@@ -349,14 +349,25 @@ export default function HomePage() {
       return;
     }
 
+    setError("");
+    setExportError("");
+    setSummaryError("");
+    setShareUrl("");
+    setProgress(null);
+    setCommits({ defaultBranch: [], otherBranches: [] });
+    setIssuesAndPRs([]);
+    setSummary("");
+    setHasSearched(true);
+    setLoading(true);
+
     try {
       const userResponse = await fetch(`https://api.github.com/users/${username}`);
       if (!userResponse.ok) {
-        setError(`User or organization "${username}" does not exist on GitHub`);
-        return;
+        throw new Error(`User or organization "${username}" does not exist on GitHub`);
       }
     } catch (err) {
       setError("Failed to verify username existence");
+      setLoading(false);
       return;
     }
 
@@ -364,16 +375,9 @@ export default function HomePage() {
 
     if (effectiveTimeframe === "custom" && (isNaN(Number(customDays)) || Number(customDays) < 1)) {
       setError("Please enter a valid number of days (minimum 1)");
+      setLoading(false);
       return;
     }
-
-    setSummary("");
-    setLoading(true);
-    setError("");
-    setProgress(null);
-    setCommits({ defaultBranch: [], otherBranches: [] });
-    setHasSearched(true);
-    setIssuesAndPRs([]);
 
     try {
       const isOrg = await checkIfOrganization(username);
@@ -554,6 +558,7 @@ export default function HomePage() {
 
   async function exportActivity(shouldRedirect = true) {
     if (!username || (!allCommits.length && !issuesAndPRs.length)) {
+      setExportError("No activity to export");
       return null;
     }
 
@@ -582,8 +587,7 @@ export default function HomePage() {
           break;
         case "custom":
           if (isNaN(Number(customDays)) || Number(customDays) < 1) {
-            setExportError("Invalid number of days");
-            return null;
+            throw new Error("Invalid number of days");
           }
           fromDate.setDate(now.getDate() - Number(customDays));
           break;
@@ -619,6 +623,7 @@ export default function HomePage() {
       const data = await response.json();
       const newShareUrl = `${window.location.origin}/share/${data.id}`;
       setShareUrl(newShareUrl);
+      setExportError("");
 
       if (shouldRedirect) {
         window.location.href = newShareUrl;
@@ -641,6 +646,7 @@ export default function HomePage() {
         window.history.pushState(null, '', url);
         setShowNotification(true);
         setTimeout(() => setShowNotification(false), 3000);
+        setExportError("");
       } catch (err) {
         setExportError('Failed to copy to clipboard');
       }
@@ -654,6 +660,7 @@ export default function HomePage() {
         `https://twitter.com/intent/tweet?text=${encodeURIComponent(`Check out my GitHub activity summary! ${url}`)}`,
         '_blank'
       );
+      setExportError("");
     }
   }
 

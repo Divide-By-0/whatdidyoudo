@@ -112,7 +112,12 @@ const FETCH_REPO_COMMITS_QUERY = `
       defaultBranchRef {
         name
       }
-      refs(first: 100, refPrefix: "refs/heads/", after: $branchCursor) {
+      refs(
+        first: 25, 
+        refPrefix: "refs/heads/", 
+        after: $branchCursor,
+        orderBy: {field: TAG_COMMIT_DATE, direction: DESC}
+      ) {
         nodes {
           name
           target {

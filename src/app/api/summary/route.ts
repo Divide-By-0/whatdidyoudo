@@ -51,7 +51,7 @@ Number: #${item.number}`;
 
     const system_prompt = `You are an expert software engineer analyzing GitHub activity to provide concise, technical summaries of developers' contributions. Your goal is to extract the essence of a user's work, focusing on the main features and significant fixes.
 
-You will be given the GitHub activity for a user to analyze this activity and provide a brief, technical summary of their contributions. 
+You will be given the GitHub activity for a user to analyze this activity and provide a brief, technical summary of their contributions. Organize the most important and active repositories first.
 
 Break down the information inside <contribution_breakdown> tags. Here are some guidelines:
 1. Summarize the overall focus of the user's work based on this breakdown

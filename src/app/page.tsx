@@ -83,6 +83,24 @@ export default function HomePage() {
     return ['all', ...Array.from(repoSet)].sort();
   }, [allCommits, issuesAndPRs]);
 
+  const filteredCounts = useMemo(() => {
+    const filteredCommits = allCommits.filter(commit => 
+      selectedRepo === 'all' || commit.repository.nameWithOwner === selectedRepo
+    );
+    const filteredIssues = issuesAndPRs.filter(item => 
+      (item.type === 'issue') && (selectedRepo === 'all' || item.repository.nameWithOwner === selectedRepo)
+    );
+    const filteredPRs = issuesAndPRs.filter(item => 
+      (item.type === 'pr') && (selectedRepo === 'all' || item.repository.nameWithOwner === selectedRepo)
+    );
+
+    return {
+      commits: filteredCommits.length,
+      issues: filteredIssues.length,
+      prs: filteredPRs.length
+    };
+  }, [allCommits, issuesAndPRs, selectedRepo]);
+
   const paginatedItems = useMemo(() => {
     const allItems = [
       ...(selectedTypes.includes('commit') ? allCommits : []),
@@ -265,16 +283,55 @@ export default function HomePage() {
   async function fetchIssuesAndPRs(fromDate: Date, isOrg: boolean) {
     setIssuesAndPRs([]);
     setProgress(prev => ({ ...prev, stage: 'fetching-issues', message: 'Fetching issues and pull requests...' }));
-
     try {
       if (isOrg) {
         const query = `org:${username} updated:>=${fromDate.toISOString().split('T')[0]}`;
+        let allItems: any[] = [];
+        let page = 1;
+        let hasMore = true;
+
+        while (hasMore) {
+          const response = await fetch(
+            `https://api.github.com/search/issues?${new URLSearchParams({
+              q: query,
+              sort: 'updated',
+              order: 'desc',
+              per_page: '100',
+              page: page.toString()
+            })}`
+          );
+
+          if (!response.ok) {
+            throw new Error(`GitHub API error: ${response.statusText}`);
+          }
+
+          const data = await response.json();
+          allItems = [...allItems, ...(data.items || [])];
+          
+          hasMore = data.items?.length === 100;
+          page++;
+          setProgress(prev => prev?.stage === 'fetching-issues'
+            ? { ...prev, message: `Fetched ${allItems.length} issues/PRs...` }
+            : prev
+          );
+        }
+
+        setIssuesAndPRs(transformIssuesData(allItems));
+        return;
+      }
+
+      let allItems: any[] = [];
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
         const response = await fetch(
           `https://api.github.com/search/issues?${new URLSearchParams({
-            q: query,
-            sort: 'updated',
+            q: `author:${username} created:>=${fromDate.toISOString().split('T')[0]}`,
+            sort: 'created',
             order: 'desc',
-            per_page: '100'
+            per_page: '100',
+            page: page.toString()
           })}`
         );
 
@@ -283,24 +340,17 @@ export default function HomePage() {
         }
 
         const data = await response.json();
-        setIssuesAndPRs(transformIssuesData(data.items || []));
-        return;
-      }
-      const response = await fetch(
-        `https://api.github.com/search/issues?${new URLSearchParams({
-          q: `author:${username} created:>=${fromDate.toISOString().split('T')[0]}`,
-          sort: 'created',
-          order: 'desc',
-          per_page: '100'
-        })}`
-      );
-
-      if (!response.ok) {
-        throw new Error(`GitHub API error: ${response.statusText}`);
+        allItems = [...allItems, ...data.items];
+        
+        hasMore = data.items?.length === 100;
+        page++;
+        setProgress(prev => prev?.stage === 'fetching-issues'
+          ? { ...prev, message: `Fetched ${allItems.length} issues/PRs...` }
+          : prev
+        );
       }
 
-      const data = await response.json();
-      setIssuesAndPRs(transformIssuesData(data.items));
+      setIssuesAndPRs(transformIssuesData(allItems));
     } finally {
       setProgress(prev => prev?.stage === 'fetching-issues' ? null : prev);
     }
@@ -946,7 +996,7 @@ export default function HomePage() {
                         : 'bg-white/10 text-white/60 hover:bg-white/20'
                       }`}
                   >
-                    Commits ({allCommits.length})
+                    Commits ({filteredCounts.commits})
                   </button>
                   <button
                     onClick={() => handleTypeToggle('issue')}
@@ -955,7 +1005,7 @@ export default function HomePage() {
                         : 'bg-white/10 text-white/60 hover:bg-white/20'
                       }`}
                   >
-                    Issues ({issuesAndPRs.filter(item => item.type === 'issue').length})
+                    Issues ({filteredCounts.issues})
                   </button>
                   <button
                     onClick={() => handleTypeToggle('pr')}
@@ -964,7 +1014,7 @@ export default function HomePage() {
                         : 'bg-white/10 text-white/60 hover:bg-white/20'
                       }`}
                   >
-                    Pull Requests ({issuesAndPRs.filter(item => item.type === 'pr').length})
+                    Pull Requests ({filteredCounts.prs})
                   </button>
                 </div>
 

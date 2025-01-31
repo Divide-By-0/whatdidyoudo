@@ -565,12 +565,32 @@ export default function HomePage() {
     setSummary("");
 
     try {
+      const allItems = [
+        ...commits,
+        ...issuesAndPRs
+      ].sort((a, b) => {
+        const dateA = new Date('committedDate' in a ? a.committedDate : a.updatedAt).getTime();
+        const dateB = new Date('committedDate' in b ? b.committedDate : b.updatedAt).getTime();
+        return dateB - dateA;
+      });
+
+      const dataString = JSON.stringify(allItems);
+      const maxChars = 750000; 
+      
+      const truncatedItems = dataString.length > maxChars 
+        ? allItems.slice(0, Math.floor(allItems.length * (maxChars / dataString.length)))
+        : allItems;
+
       const response = await fetch('/api/summary', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ commits, issuesAndPRs, username }),
+        body: JSON.stringify({ 
+          commits: truncatedItems.filter(item => 'committedDate' in item),
+          issuesAndPRs: truncatedItems.filter(item => !('committedDate' in item)),
+          username 
+        }),
       });
 
       if (!response.ok || !response.body) {

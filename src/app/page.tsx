@@ -51,6 +51,7 @@ export default function HomePage() {
   const [exportError, setExportError] = useState("");
   const [shareUrl, setShareUrl] = useState<string>("");
   const [showNotification, setShowNotification] = useState(false);
+  const [lastRequestTime, setLastRequestTime] = useState<number | null>(null);
 
   const allCommits = useMemo(() => {
     const commitMap = new Map<string, EnrichedCommit>();
@@ -399,6 +400,14 @@ export default function HomePage() {
       return;
     }
 
+    if (timeframe === "custom") {
+      const days = Number(customDays);
+      if (isNaN(days) || days < 1 || days > 1000) {
+        setError("Please enter a valid number of days (between 1 and 1000)");
+        return;
+      }
+    }
+
     setError("");
     setExportError("");
     setSummaryError("");
@@ -411,6 +420,12 @@ export default function HomePage() {
     setLoading(true);
 
     try {
+      const now = Date.now();
+      if (lastRequestTime && now - lastRequestTime < 10000) {
+        await new Promise(resolve => setTimeout(resolve, 10000 - (now - lastRequestTime)));
+      }
+      setLastRequestTime(now);
+
       const userResponse = await fetch(`https://api.github.com/users/${username}`);
       if (!userResponse.ok) {
         throw new Error(`User or organization "${username}" does not exist on GitHub`);
@@ -783,7 +798,7 @@ export default function HomePage() {
               }
             }}
             placeholder="GitHub username or organization"
-            className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-white placeholder:text-white/50"
+            className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-white placeholder:text-white/50 focus:outline-none"
           />
 
           <select
@@ -797,7 +812,7 @@ export default function HomePage() {
               setHasSearched(false);
               window.history.pushState(null, '', '/');
             }}
-            className="rounded-lg bg-white/10 px-4 py-2 text-white"
+            className="rounded-lg bg-white/10 px-4 py-2 text-white focus:outline-none"
           >
             <option value="24h">Last 24 Hours</option>
             <option value="week">Past Week</option>
@@ -811,12 +826,15 @@ export default function HomePage() {
               type="number"
               value={customDays}
               onChange={(e) => {
-                setCustomDays(e.target.value);
-                setCommits({ defaultBranch: [], otherBranches: [] });
-                setIssuesAndPRs([]);
-                setSummary("");
-                setHasSearched(false);
-                window.history.pushState(null, '', '/');
+                const value = e.target.value;
+                if (!value || (Number(value) >= 1 && Number(value) <= 1000)) {
+                  setCustomDays(value);
+                  setCommits({ defaultBranch: [], otherBranches: [] });
+                  setIssuesAndPRs([]);
+                  setSummary("");
+                  setHasSearched(false);
+                  window.history.pushState(null, '', '/');
+                }
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
@@ -825,8 +843,9 @@ export default function HomePage() {
                 }
               }}
               min="1"
-              placeholder="Number of days"
-              className="w-24 rounded-lg bg-white/10 px-4 py-2 text-white"
+              max="1000"
+              placeholder="Number of days (1-1000)"
+              className="w-32 rounded-lg bg-white/10 px-4 py-2 text-white focus:outline-none"
             />
           )}
 
@@ -836,7 +855,7 @@ export default function HomePage() {
               fetchCommits();
             }}
             disabled={loading}
-            className="rounded-lg bg-white/20 px-6 py-2 font-semibold hover:bg-white/30 disabled:opacity-50"
+            className="rounded-lg bg-white/20 px-6 py-2 font-semibold hover:bg-white/30 disabled:opacity-50 focus:outline-none"
           >
             {loading ? "Loading..." : "Search"}
           </button>

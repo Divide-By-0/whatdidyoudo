@@ -555,17 +555,17 @@ export default function HomePage() {
         message: 'Fetching issues and pull requests...'
       });
 
-      await fetchIssuesAndPRs(fromDate, isOrg)
-        .catch((err) => {
-          console.error('Error fetching issues and PRs:', err);
-          setIssuesAndPRs([]);
-        })
-        .finally(() => {
-          if (allLatestCommits.length > 0) {
-            setProgress(null);
-            return generateSummary(allLatestCommits);
-          }
-        });
+      try {
+        await fetchIssuesAndPRs(fromDate, isOrg);
+      } catch (err) {
+        console.error('Error fetching issues and PRs:', err);
+        setIssuesAndPRs([]);
+      }
+
+      if (allLatestCommits.length > 0) {
+        setProgress(null);
+        await generateSummary(allLatestCommits);
+      }
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch commits");

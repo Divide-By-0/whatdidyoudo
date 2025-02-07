@@ -556,13 +556,16 @@ export default function HomePage() {
       });
 
       await fetchIssuesAndPRs(fromDate, isOrg)
-        .then(() => {
-          if (allLatestCommits.length > 0 || issuesAndPRs.length > 0) {
+        .catch((err) => {
+          console.error('Error fetching issues and PRs:', err);
+          setIssuesAndPRs([]);
+        })
+        .finally(() => {
+          if (allLatestCommits.length > 0) {
             setProgress(null);
             return generateSummary(allLatestCommits);
           }
-        })
-        .catch(console.error);
+        });
 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to fetch commits");

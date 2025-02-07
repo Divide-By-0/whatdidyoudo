@@ -1,4 +1,5 @@
 import { Anthropic } from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { EnrichedCommit } from '../../../lib/github';
 import { NextResponse } from 'next/server';
 
@@ -6,11 +7,16 @@ const anthropic = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
 });
 
+const grok = new OpenAI({
+  apiKey: process.env.GROK_API_KEY,
+  baseURL: "https://api.x.ai/v1",
+});
+
 export const runtime = 'edge';
 
 export async function POST(req: Request) {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return new NextResponse('Anthropic API key not configured', { status: 500 });
+  if (!process.env.ANTHROPIC_API_KEY && !process.env.GROK_API_KEY) {
+    return new NextResponse('No AI service API keys configured', { status: 500 });
   }
 
   try {
@@ -56,7 +62,7 @@ You will be given the GitHub activity for a user to analyze this activity and pr
 Break down the information inside <contribution_breakdown> tags. Here are some guidelines:
 1. Summarize the overall focus of the user's work based on this breakdown
 2. Keep it short and concise
-3. Use hyperlinks to commits, repositories, issues, and pull requests for clarity
+3. Use hyperlinks to commits, repositories, issues, and pull requests for clarity. Do NOT repeat hyperlinks, its ugly. Make sure you have the full link.
 4. Focus on technical details of main features and fixes
 5. Use bullet points for clarity
 6. Do NOT mention the number of commits
@@ -85,44 +91,89 @@ Remember to keep your summary technical, concise, and focused on the most signif
 
     const encoder = new TextEncoder();
 
-    const stream = await anthropic.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 4000,
-      system: system_prompt,
-      temperature: 0.8,
-      messages: [
-        {
-          role: 'user',
-          content: prompt
-        },
-        {
-          role: 'assistant',
-          content: '<contribution_breakdown>'
-        }
-      ],
-      stream: true,
-    });
+    try {
+      if (process.env.ANTHROPIC_API_KEY) {
+        const stream = await anthropic.messages.create({
+          model: 'claude-3-5-sonnet-20241022',
+          max_tokens: 4000,
+          system: system_prompt,
+          temperature: 0.8,
+          messages: [
+            {
+              role: 'user',
+              content: prompt
+            },
+            {
+              role: 'assistant',
+              content: '<contribution_breakdown>'
+            }
+          ],
+          stream: true,
+        });
 
-    const customStream = new ReadableStream({
-      async start(controller) {
-        for await (const chunk of stream) {
-          const content = (chunk as any).delta?.text;
-          if (content) {
-            controller.enqueue(encoder.encode(content));
-          }
-        }
-        controller.enqueue(encoder.encode('[DONE]'));
-        controller.close();
-      },
-    });
+        const customStream = new ReadableStream({
+          async start(controller) {
+            for await (const chunk of stream) {
+              const content = (chunk as any).delta?.text;
+              if (content) {
+                controller.enqueue(encoder.encode(content));
+              }
+            }
+            controller.enqueue(encoder.encode('[DONE]'));
+            controller.close();
+          },
+        });
 
-    return new NextResponse(customStream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-    });
+        return new NextResponse(customStream, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        });
+      }
+    } catch (error) {
+      // fallback to grok
+      if (process.env.GROK_API_KEY) {
+        const stream = await grok.chat.completions.create({
+          model: 'grok-2-latest',
+          messages: [
+            {
+              role: 'system',
+              content: system_prompt
+            },
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
+          stream: true,
+        });
+
+        const customStream = new ReadableStream({
+          async start(controller) {
+            for await (const chunk of stream) {
+              const content = chunk.choices[0]?.delta?.content;
+              if (content) {
+                controller.enqueue(encoder.encode(content));
+              }
+            }
+            controller.enqueue(encoder.encode('[DONE]'));
+            controller.close();
+          },
+        });
+
+        return new NextResponse(customStream, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+        });
+      }
+      
+      throw new Error('All AI services failed');
+    }
   } catch (error) {
     console.error('Error:', error);
     return new NextResponse(

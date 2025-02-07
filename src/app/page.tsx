@@ -628,7 +628,7 @@ export default function HomePage() {
           if (line === '[DONE]') {
             break;
           }
-          setSummary(prev => prev + line.replace("</contribution_breakdown>", "") + '\n');
+          setSummary(prev => prev + line.replace("<contribution_breakdown>", "").replace("</contribution_breakdown>", "") + '\n');
         }
 
         buffer = lines[lines.length - 1] || '';

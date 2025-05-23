@@ -1,10 +1,10 @@
-# What Did You Do?
+# What Did You Do (This Week)?
 
 ## Overview
 
-**WhatDidYouDo** is a simple web application that lets you track GitHub activity over different timeframes (last 24 hours, week, month, or a custom range). Inspired by Elon Musk's "What did you get done this week?" question, this tool provides a quick way to review contributions across repositories.
+**WhatDidYouDo** is a simple web application that lets you track GitHub activity over different timeframes (last 24 hours, week, month, or a custom range). Inspired by Elon Musk's "What did you get done this week?" question, this tool provides a quick way to review contributions across repositories. It automatically goes through all commits from an organization or developer (even on external repositories), and summarizes all of the commit messages and sorts them by repository. It can be useful for organizations to develop changelogs, assess engineering candidates based on their Github, and keep a pulse on your own productivity.
 
-Visit [WhatDidYouDo](https://www.whatdidyoudo.dev/) to try it out.
+Visit [whatdidyoudo.dev](https://www.whatdidyoudo.dev/) to try it out.
 
 ## Features
 - **Quick Search:** Enter any GitHub username or organization to view recent activity.
@@ -23,5 +23,4 @@ Visit [WhatDidYouDo](https://www.whatdidyoudo.dev/) to try it out.
 This project is built using the **T3 Stack**, powered by **Next.js, TypeScript, Tailwind CSS, tRPC, and Prisma**.
 
 ## Contributing
-Contributions are welcome. If you find a bug or have an idea for improvement, feel free to submit an issue or open a pull request.
-
+Contributions are welcome. If you find a bug or have an idea for improvement, feel free to submit an issue or open a pull request!

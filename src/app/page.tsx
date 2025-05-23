@@ -3,42 +3,42 @@
 import { useState, useMemo, useEffect } from "react";
 import { EnrichedCommit } from "../lib/github";
 import ReactMarkdown from 'react-markdown';
-
-interface Progress {
-  stage: 'checking-type' | 'finding-repos' | 'fetching-commits' | 'fetching-issues';
-  reposFound?: number;
-  reposProcessed?: number;
-  totalRepos?: number;
-  message?: string;
-}
-
-interface IssueOrPR {
-  id: number;
-  title: string;
-  number: number;
-  state: string;
-  createdAt: string;
-  updatedAt: string;
-  url: string;
-  repository: {
-    nameWithOwner: string;
-  };
-  type: 'issue' | 'pr';
-}
+import Header from '../components/Header';
+import { useSession, signOut } from 'next-auth/react';
+import GlobalSearch from '../components/GlobalSearch';
+import PersonalSearch from '../components/PersonalSearch';
+import { 
+  checkIfOrganization, 
+  fetchOrganizationRepos, 
+  fetchUserRepos, 
+  fetchIssuesAndPRs,
+  verifyUserExists,
+  type IssueOrPR,
+  type Progress
+} from "../lib/github-api";
+import {
+  fetchUserContributions,
+  fetchUserProfile,
+} from "../lib/github-oauth";
+import PrivateRepoWarningDialog from '../components/PrivateRepoWarningDialog';
 
 export default function HomePage() {
+  const { data: session } = useSession();
   const [username, setUsername] = useState("");
   const [timeframe, setTimeframe] = useState("week");
   const [customDays, setCustomDays] = useState("1");
+  const [includePrivate, setIncludePrivate] = useState(false);
   const [commits, setCommits] = useState<{
     defaultBranch: EnrichedCommit[];
     otherBranches: EnrichedCommit[];
   }>({ defaultBranch: [], otherBranches: [] });
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | React.ReactNode>("");
   const [isOrganization, setIsOrganization] = useState<boolean | null>(null);
   const [progress, setProgress] = useState<Progress | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
+  const [usedPersonalSearch, setUsedPersonalSearch] = useState(false);
+  const [usedGlobalSearch, setUsedGlobalSearch] = useState(false);
   const [summary, setSummary] = useState("");
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState("");
@@ -52,6 +52,8 @@ export default function HomePage() {
   const [shareUrl, setShareUrl] = useState<string>("");
   const [showNotification, setShowNotification] = useState(false);
   const [lastRequestTime, setLastRequestTime] = useState<number | null>(null);
+  const [showPrivateRepoWarning, setShowPrivateRepoWarning] = useState(false);
+  const [pendingShareAction, setPendingShareAction] = useState<'export' | 'twitter' | null>(null);
 
   const allCommits = useMemo(() => {
     const commitMap = new Map<string, EnrichedCommit>();
@@ -156,246 +158,16 @@ export default function HomePage() {
         if (urlTimeframe == 'custom' && urlCustomDays) {
           setCustomDays(urlCustomDays)
         }
-        fetchCommits();
+        fetchCommits(urlUsername);
       }
     }
 
     f().catch(console.error);
-  }, [username, timeframe, customDays]);
+  }, []);
 
-  async function checkIfOrganization(name: string): Promise<boolean> {
-    setProgress({ stage: 'checking-type' });
-    try {
-      const response = await fetch(`https://api.github.com/orgs/${name}`);
-      return response.ok;
-    } catch {
-      return false;
-    }
-  }
-
-  async function fetchOrganizationRepos(orgName: string, since: string): Promise<string[]> {
-    const repoSet = new Set<string>();
-    let page = 1;
-    let hasMore = true;
-
-    setProgress({ stage: 'finding-repos', reposFound: 0 });
-
-    while (hasMore) {
-      const response = await fetch(
-        `https://api.github.com/orgs/${orgName}/repos?type=all&sort=pushed&direction=desc&per_page=100&page=${page}`
-      );
-
-      if (!response.ok) {
-        break;
-      }
-
-      const repos = await response.json();
-      if (repos.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      repos.forEach((repo: any) => {
-        if (new Date(repo.pushed_at) >= new Date(since)) {
-          repoSet.add(repo.full_name);
-          setProgress(prev => prev?.stage === 'finding-repos'
-            ? { ...prev, reposFound: repoSet.size }
-            : prev
-          );
-        }
-      });
-
-      page++;
-    }
-
-    return Array.from(repoSet);
-  }
-
-  async function fetchUserRepos(username: string, since: string): Promise<string[]> {
-    const repoSet = new Set<string>();
-    setProgress({ stage: 'finding-repos', reposFound: 0 });
-
-    // First try the events API to get recent activity
-    const eventsResponse = await fetch(
-      `https://api.github.com/users/${username}/events/public`
-    );
-
-    if (!eventsResponse.ok) {
-      throw new Error(`GitHub API error: ${eventsResponse.statusText}`);
-    }
-
-    const events = await eventsResponse.json();
-
-    // Get repos from push events
-    events.forEach((event: any) => {
-      if (event.repo) {
-        repoSet.add(event.repo.name);
-        setProgress(prev => prev?.stage === 'finding-repos'
-          ? { ...prev, reposFound: repoSet.size }
-          : prev
-        );
-      }
-    });
-
-    // Also fetch user's repositories to catch any that might not be in recent events
-    const reposResponse = await fetch(
-      `https://api.github.com/users/${username}/repos?sort=pushed&direction=desc`
-    );
-
-    if (reposResponse.ok) {
-      const repos = await reposResponse.json();
-      repos.forEach((repo: any) => {
-        if (new Date(repo.pushed_at) >= new Date(since)) {
-          repoSet.add(repo.full_name);
-          setProgress(prev => prev?.stage === 'finding-repos'
-            ? { ...prev, reposFound: repoSet.size }
-            : prev
-          );
-        }
-      });
-    }
-
-    // Get repositories the user has contributed to
-    const contributedReposResponse = await fetch(
-      `https://api.github.com/search/commits?q=author:${username}+committer-date:>${since}&sort=committer-date&order=desc&per_page=100`,
-      {
-        headers: {
-          'Accept': 'application/vnd.github.cloak-preview'
-        }
-      }
-    );
-
-    if (contributedReposResponse.ok) {
-      const contributedData = await contributedReposResponse.json();
-      contributedData.items?.forEach((item: any) => {
-        if (item.repository) {
-          repoSet.add(item.repository.full_name);
-          setProgress(prev => prev?.stage === 'finding-repos'
-            ? { ...prev, reposFound: repoSet.size }
-            : prev
-          );
-        }
-      });
-    }
-
-    return Array.from(repoSet);
-  }
-
-  async function fetchIssuesAndPRs(fromDate: Date, isOrg: boolean) {
-    setIssuesAndPRs([]);
-    setProgress(prev => ({ ...prev, stage: 'fetching-issues', message: 'Fetching issues and pull requests...' }));
-    try {
-      if (isOrg) {
-        const query = `org:${username} updated:>=${fromDate.toISOString().split('T')[0]}`;
-        let allItems: any[] = [];
-        let page = 1;
-        let hasMore = true;
-
-        while (hasMore) {
-          const response = await fetch(
-            `https://api.github.com/search/issues?${new URLSearchParams({
-              q: query,
-              sort: 'updated',
-              order: 'desc',
-              per_page: '100',
-              page: page.toString()
-            })}`
-          );
-
-          if (!response.ok) {
-            throw new Error(`GitHub API error: ${response.statusText}`);
-          }
-
-          const data = await response.json();
-          allItems = [...allItems, ...(data.items || [])];
-          
-          hasMore = data.items?.length === 100;
-          page++;
-          setProgress(prev => prev?.stage === 'fetching-issues'
-            ? { ...prev, message: `Fetched ${allItems.length} issues/PRs...` }
-            : prev
-          );
-        }
-
-        setIssuesAndPRs(transformIssuesData(allItems));
-        return;
-      }
-
-      let allItems: any[] = [];
-      let page = 1;
-      let hasMore = true;
-
-      while (hasMore) {
-        const response = await fetch(
-          `https://api.github.com/search/issues?${new URLSearchParams({
-            q: `author:${username} created:>=${fromDate.toISOString().split('T')[0]}`,
-            sort: 'created',
-            order: 'desc',
-            per_page: '100',
-            page: page.toString()
-          })}`
-        );
-
-        if (!response.ok) {
-          throw new Error(`GitHub API error: ${response.statusText}`);
-        }
-
-        const data = await response.json();
-        allItems = [...allItems, ...data.items];
-        
-        hasMore = data.items?.length === 100;
-        page++;
-        setProgress(prev => prev?.stage === 'fetching-issues'
-          ? { ...prev, message: `Fetched ${allItems.length} issues/PRs...` }
-          : prev
-        );
-      }
-
-      setIssuesAndPRs(transformIssuesData(allItems));
-    } finally {
-      setProgress(prev => prev?.stage === 'fetching-issues' ? null : prev);
-    }
-  }
-
-
-  function transformIssuesData(items: any[]): IssueOrPR[] {
-    return items.map((item: any) => {
-      let repoName = 'unknown';
-      if (item.repository?.full_name) {
-        repoName = item.repository.full_name;
-      } else if (item.repository_url) {
-        repoName = item.repository_url.replace('https://api.github.com/repos/', '');
-      } else if (item.url) {
-        const matches = item.url.match(/https:\/\/api\.github\.com\/repos\/([^/]+\/[^/]+)/);
-        if (matches) {
-          repoName = matches[1];
-        }
-      }
-
-      const isPR = Boolean(
-        item.pull_request ||
-        item.url?.includes('/pulls/') ||
-        item.html_url?.includes('/pull/')
-      );
-
-      return {
-        id: item.id,
-        title: item.title,
-        number: item.number,
-        state: item.state,
-        createdAt: item.created_at,
-        updatedAt: item.updated_at,
-        url: item.html_url,
-        repository: {
-          nameWithOwner: repoName
-        },
-        type: isPR ? 'pr' : 'issue'
-      };
-    });
-  }
-
-  async function fetchCommits() {
-    if (!username) {
+  async function fetchCommits(searchUsername?: string) {
+    const effectiveUsername = searchUsername || username;
+    if (!effectiveUsername) {
       setError("Please enter a GitHub username or organization");
       return;
     }
@@ -426,55 +198,115 @@ export default function HomePage() {
       }
       setLastRequestTime(now);
 
-      const userResponse = await fetch(`https://api.github.com/users/${username}`);
-      if (!userResponse.ok) {
-        throw new Error(`User or organization "${username}" does not exist on GitHub`);
+      // If user is logged in and searching for their own activity, use OAuth functions
+      if (session?.accessToken && effectiveUsername === session.user?.login) {
+        const fromDate = new Date();
+
+        switch (timeframe) {
+          case "24h":
+            fromDate.setHours(fromDate.getHours() - 24);
+            break;
+          case "week":
+            fromDate.setDate(fromDate.getDate() - 7);
+            break;
+          case "month":
+            fromDate.setMonth(fromDate.getMonth() - 1);
+            break;
+          case "year":
+            fromDate.setFullYear(fromDate.getFullYear() - 1);
+            break;
+          case "custom":
+            fromDate.setDate(fromDate.getDate() - Number(customDays));
+            break;
+        }
+
+        setProgress({ stage: 'finding-repos' });
+        const response = await fetchUserContributions(session.accessToken, fromDate.toISOString(), includePrivate);
+
+        if (response.error) {
+          if (response.error.includes('additional authorization')) {
+            setError(
+              <div>
+                <p>Private repository access requires additional authorization.</p>
+                <p className="mt-2">
+                  <button
+                    onClick={() => {
+                      signOut({ callbackUrl: '/' });
+                    }}
+                    className="text-blue-400 hover:underline"
+                  >
+                    Sign out and sign in again
+                  </button>
+                  {' '}with the correct permissions.
+                </p>
+              </div>
+            );
+          } else {
+            throw new Error(response.error);
+          }
+          return;
+        }
+
+        const { commits, issues, repositories } = response.data;
+
+        if (repositories.length === 0) {
+          setError("No repositories with recent activity found");
+          return;
+        }
+
+        setCommits({
+          defaultBranch: commits,
+          otherBranches: [],
+        });
+        setIssuesAndPRs(issues);
+        setIsOrganization(false);
+
+        if (commits.length > 0) {
+          setProgress(null);
+          await generateSummary(commits, effectiveUsername);
+        }
+
+        setLoading(false);
+        setProgress(null);
+        return;
       }
-    } catch (err) {
-      setError("Failed to verify username existence");
-      setLoading(false);
-      return;
-    }
 
-    const effectiveTimeframe = timeframe;
+      // For non-OAuth requests, continue with existing flow
+      const userExists = await verifyUserExists(effectiveUsername, session?.accessToken);
+      if (!userExists) {
+        throw new Error(`User or organization "${effectiveUsername}" does not exist on GitHub`);
+      }
 
-    if (effectiveTimeframe === "custom" && (isNaN(Number(customDays)) || Number(customDays) < 1)) {
-      setError("Please enter a valid number of days (minimum 1)");
-      setLoading(false);
-      return;
-    }
-
-    try {
-      const isOrg = await checkIfOrganization(username);
+      const isOrg = await checkIfOrganization(effectiveUsername, session?.accessToken);
       setIsOrganization(isOrg);
 
-      const now = new Date();
       const fromDate = new Date();
 
-      switch (effectiveTimeframe) {
+      switch (timeframe) {
         case "24h":
-          fromDate.setHours(now.getHours() - 24);
+          fromDate.setHours(fromDate.getHours() - 24);
           break;
         case "week":
-          fromDate.setDate(now.getDate() - 7);
+          fromDate.setDate(fromDate.getDate() - 7);
           break;
         case "month":
-          fromDate.setMonth(now.getMonth() - 1);
+          fromDate.setMonth(fromDate.getMonth() - 1);
           break;
         case "year":
-          fromDate.setFullYear(now.getFullYear() - 1);
+          fromDate.setFullYear(fromDate.getFullYear() - 1);
           break;
         case "custom":
-          fromDate.setDate(now.getDate() - Number(customDays));
+          fromDate.setDate(fromDate.getDate() - Number(customDays));
           break;
       }
 
+      setProgress({ stage: 'finding-repos' });
       const repos = isOrg
-        ? await fetchOrganizationRepos(username, fromDate.toISOString())
-        : await fetchUserRepos(username, fromDate.toISOString());
+        ? await fetchOrganizationRepos(effectiveUsername, fromDate.toISOString(), session?.accessToken)
+        : await fetchUserRepos(effectiveUsername, fromDate.toISOString(), session?.accessToken);
 
       if (repos.length === 0) {
-        setError(`No repositories with recent activity found for ${isOrg ? 'organization' : 'user'} "${username}"`);
+        setError(`No repositories with recent activity found for ${isOrg ? 'organization' : 'user'} "${effectiveUsername}"`);
         return;
       }
 
@@ -487,7 +319,7 @@ export default function HomePage() {
 
       const response = await fetch(
         `/api/commits?${new URLSearchParams({
-          username,
+          username: effectiveUsername,
           from: fromDate.toISOString(),
           repos: JSON.stringify(repos),
           isOrg: isOrg.toString()
@@ -556,7 +388,8 @@ export default function HomePage() {
       });
 
       try {
-        await fetchIssuesAndPRs(fromDate, isOrg);
+        const issues = await fetchIssuesAndPRs(effectiveUsername, fromDate, isOrg, session?.accessToken);
+        setIssuesAndPRs(issues);
       } catch (err) {
         console.error('Error fetching issues and PRs:', err);
         setIssuesAndPRs([]);
@@ -564,7 +397,7 @@ export default function HomePage() {
 
       if (allLatestCommits.length > 0) {
         setProgress(null);
-        await generateSummary(allLatestCommits);
+        await generateSummary(allLatestCommits, effectiveUsername);
       }
 
     } catch (err) {
@@ -577,7 +410,7 @@ export default function HomePage() {
     }
   }
 
-  async function generateSummary(commits: EnrichedCommit[]) {
+  async function generateSummary(commits: EnrichedCommit[], effectiveUsername: string) {
     setSummaryLoading(true);
     setSummaryError("");
     setSummary("");
@@ -607,7 +440,7 @@ export default function HomePage() {
         body: JSON.stringify({ 
           commits: truncatedItems.filter(item => 'committedDate' in item),
           issuesAndPRs: truncatedItems.filter(item => !('committedDate' in item)),
-          username 
+          username: effectiveUsername
         }),
       });
 
@@ -727,6 +560,24 @@ export default function HomePage() {
   }
 
   async function handleExport() {
+    if (includePrivate) {
+      setShowPrivateRepoWarning(true);
+      setPendingShareAction('export');
+      return;
+    }
+    await performExport();
+  }
+
+  async function handleTwitterShare() {
+    if (includePrivate) {
+      setShowPrivateRepoWarning(true);
+      setPendingShareAction('twitter');
+      return;
+    }
+    await performTwitterShare();
+  }
+
+  async function performExport() {
     const url = await exportActivity(false);
     if (url) {
       try {
@@ -741,7 +592,7 @@ export default function HomePage() {
     }
   }
 
-  async function handleTwitterShare() {
+  async function performTwitterShare() {
     const url = await exportActivity(false);
     if (url) {
       window.open(
@@ -750,6 +601,16 @@ export default function HomePage() {
       );
       setExportError("");
     }
+  }
+
+  async function handlePrivateRepoWarningConfirm() {
+    setShowPrivateRepoWarning(false);
+    if (pendingShareAction === 'export') {
+      await performExport();
+    } else if (pendingShareAction === 'twitter') {
+      await performTwitterShare();
+    }
+    setPendingShareAction(null);
   }
 
   const handleTypeToggle = (type: 'commit' | 'issue' | 'pr') => {
@@ -769,8 +630,27 @@ export default function HomePage() {
     setCurrentPage(1);
   };
 
+  const resetState = () => {
+    setCommits({ defaultBranch: [], otherBranches: [] });
+    setIssuesAndPRs([]);
+    setIsOrganization(null);
+    setProgress(null);
+    setHasSearched(false);
+    setUsedPersonalSearch(false);
+    setUsedGlobalSearch(false);
+    setSummary("");
+  };
+
+  // Log complete session user data
+  useEffect(() => {
+    if (session?.user) {
+      console.log('Session User Data:', session.user);
+    }
+  }, [session]);
+
   return (
     <main className="flex min-h-screen flex-col items-center bg-black p-8 text-white">
+      <Header />
       <div className="w-full max-w-4xl">
         <h1 className="mb-8 text-center text-4xl font-bold">
           {username ? (
@@ -780,89 +660,75 @@ export default function HomePage() {
           )}
         </h1>
 
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row">
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => {
-              setUsername(e.target.value);
-              setCommits({ defaultBranch: [], otherBranches: [] });
-              setIssuesAndPRs([]);
-              setIsOrganization(null);
-              setProgress(null);
-              setHasSearched(false);
-              setSummary("");
-              window.history.pushState(null, '', '/');
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') {
-                window.history.pushState(null, '', '/');
-                fetchCommits();
-              }
-            }}
-            placeholder="GitHub username or organization"
-            className="flex-1 rounded-lg bg-white/10 px-4 py-2 text-white placeholder:text-white/50 focus:outline-none"
-          />
-
-          <select
-            value={timeframe}
-            onChange={(e) => {
-              const newTimeframe = e.target.value;
-              setTimeframe(newTimeframe);
-              setCommits({ defaultBranch: [], otherBranches: [] });
-              setIssuesAndPRs([]);
-              setSummary("");
-              setHasSearched(false);
-              window.history.pushState(null, '', '/');
-            }}
-            className="rounded-lg bg-white/10 px-4 py-2 text-white focus:outline-none"
-          >
-            <option value="24h">Last 24 Hours</option>
-            <option value="week">Past Week</option>
-            <option value="month">Past Month</option>
-            <option value="year">Past Year</option>
-            <option value="custom">Custom Days</option>
-          </select>
-
-          {timeframe === "custom" && (
-            <input
-              type="number"
-              value={customDays}
-              onChange={(e) => {
-                const value = e.target.value;
-                if (!value || (Number(value) >= 1 && Number(value) <= 1000)) {
-                  setCustomDays(value);
-                  setCommits({ defaultBranch: [], otherBranches: [] });
-                  setIssuesAndPRs([]);
-                  setSummary("");
-                  setHasSearched(false);
-                  window.history.pushState(null, '', '/');
-                }
+        {!hasSearched || loading ? (
+          <>
+            {!usedPersonalSearch && (
+              <GlobalSearch
+                username={username}
+                setUsername={setUsername}
+                timeframe={timeframe}
+                setTimeframe={setTimeframe}
+                customDays={customDays}
+                setCustomDays={setCustomDays}
+                loading={loading}
+                onSearch={() => {
+                  if (username) {
+                    setUsedGlobalSearch(true);
+                    fetchCommits(username);
+                  }
+                }}
+                resetState={resetState}
+              />
+            )}
+            {session?.user?.login && !usedGlobalSearch && (
+              <>
+                {!usedPersonalSearch && (
+                  <div className="relative my-8">
+                    <div className="absolute inset-0 flex items-center">
+                      <div className="w-full border-t border-gray-300"></div>
+                    </div>
+                    <div className="relative flex justify-center">
+                      <span className="bg-white px-4 text-sm text-gray-500">or search your own activity</span>
+                    </div>
+                  </div>
+                )}
+                <PersonalSearch
+                  username={session.user.login}
+                  timeframe={timeframe}
+                  setTimeframe={setTimeframe}
+                  customDays={customDays}
+                  setCustomDays={setCustomDays}
+                  loading={loading}
+                  includePrivate={includePrivate}
+                  setIncludePrivate={setIncludePrivate}
+                  onSearch={() => {
+                    const userLogin = session?.user?.login;
+                    if (userLogin) {
+                      setUsername(userLogin);
+                      setUsedPersonalSearch(true);
+                      setTimeout(() => fetchCommits(userLogin), 0);
+                    }
+                  }}
+                  resetState={resetState}
+                />
+              </>
+            )}
+          </>
+        ) : (
+          <div className="mb-8 flex justify-center">
+            <button
+              onClick={() => {
+                resetState();
+                setUsername('');
+                setTimeframe('week');
+                setCustomDays('1');
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  window.history.pushState(null, '', '/');
-                  fetchCommits();
-                }
-              }}
-              min="1"
-              max="1000"
-              placeholder="Number of days (1-1000)"
-              className="w-32 rounded-lg bg-white/10 px-4 py-2 text-white focus:outline-none"
-            />
-          )}
-
-          <button
-            onClick={() => {
-              window.history.pushState(null, '', '/');
-              fetchCommits();
-            }}
-            disabled={loading}
-            className="rounded-lg bg-white/20 px-6 py-2 font-semibold hover:bg-white/30 disabled:opacity-50 focus:outline-none"
-          >
-            {loading ? "Loading..." : "Search"}
-          </button>
-        </div>
+              className="rounded-lg bg-white/20 px-6 py-2 font-semibold hover:bg-white/30 focus:outline-none"
+            >
+              New Search
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 rounded-lg bg-red-500/20 p-4 text-red-200">
@@ -1211,6 +1077,16 @@ export default function HomePage() {
           </>
         )}
       </div>
+
+      {showPrivateRepoWarning && (
+        <PrivateRepoWarningDialog
+          onConfirm={handlePrivateRepoWarningConfirm}
+          onCancel={() => {
+            setShowPrivateRepoWarning(false);
+            setPendingShareAction(null);
+          }}
+        />
+      )}
     </main>
   );
 }
